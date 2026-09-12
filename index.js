@@ -19,8 +19,8 @@ app.post('/deposit/1voucher', async (req, res) => {
       return res.status(400).json({ success: false, error: "Voucher PIN is required" });
     }
 
-    // Basic Auth credentials confirmed by Paul Strydom
-    const authHeader = "Basic " + Buffer.from("IamLizo:1Aml!zo#123").toString("base64");
+    // Explicit Base64 encoding for IamLizo:1Aml!zo#123
+    const authHeader = "Basic SWFtTGl6bzoxQW1sIXpvIzEyMw==";
 
     const payload = {
       merchantBranchProductNumber: "JQVSND",
@@ -47,12 +47,13 @@ app.post('/deposit/1voucher', async (req, res) => {
       headers: {
         "Content-Type": "application/json",
         "Accept": "application/json",
-        "Authorization": authHeader
+        "Authorization": authHeader,
+        "MerchantClientProfile": "PMV00003",
+        "MerchantBranchProductNumber": "JQVSND"
       },
       body: JSON.stringify(payload)
     });
 
-    // Read response as raw text first to prevent JSON parse crashes
     const responseText = await response.text();
     console.log("PAYM8 Status Code:", response.status);
     console.log("PAYM8 Raw Response:", responseText);
@@ -62,7 +63,7 @@ app.post('/deposit/1voucher', async (req, res) => {
       try {
         data = JSON.parse(responseText);
       } catch (parseErr) {
-        console.error("Non-JSON response received from PAYM8:", responseText);
+        console.error("Non-JSON parsing:", responseText);
       }
     }
 
@@ -71,7 +72,7 @@ app.post('/deposit/1voucher', async (req, res) => {
     } else {
       return res.status(400).json({ 
         success: false, 
-        error: data.errorMessage || data.message || responseText || `Gateway returned HTTP status ${response.status}` 
+        error: data.errorMessage || data.message || `Gateway authorization failed (HTTP ${response.status}). Verify API user activation with PAYM8.` 
       });
     }
 
@@ -79,8 +80,4 @@ app.post('/deposit/1voucher', async (req, res) => {
     console.error("Voucher submission error:", err);
     res.status(500).json({ success: false, error: err.message });
   }
-});
-
-app.listen(PORT, () => {
-  console.log(`Server listening on port ${PORT}`);
 });
