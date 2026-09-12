@@ -19,8 +19,8 @@ app.post('/deposit/1voucher', async (req, res) => {
       return res.status(400).json({ success: false, error: "Voucher PIN is required" });
     }
 
-    // Explicit Base64 encoding for IamLizo:1Aml!zo#123
-    const authHeader = "Basic SWFtTGl6bzoxQW1sIXpvIzEyMw==";
+    // Single set of quotes for string definition
+    const authHeader = "Basic " + Buffer.from("IamLizo:1Aml!zo#123").toString("base64");
 
     const payload = {
       merchantBranchProductNumber: "JQVSND",
@@ -63,7 +63,7 @@ app.post('/deposit/1voucher', async (req, res) => {
       try {
         data = JSON.parse(responseText);
       } catch (parseErr) {
-        console.error("Non-JSON parsing:", responseText);
+        console.error("Non-JSON parsing error:", responseText);
       }
     }
 
@@ -72,7 +72,7 @@ app.post('/deposit/1voucher', async (req, res) => {
     } else {
       return res.status(400).json({ 
         success: false, 
-        error: data.errorMessage || data.message || `Gateway authorization failed (HTTP ${response.status}). Verify API user activation with PAYM8.` 
+        error: data.errorMessage || data.message || `Gateway returned HTTP status ${response.status}` 
       });
     }
 
@@ -80,4 +80,8 @@ app.post('/deposit/1voucher', async (req, res) => {
     console.error("Voucher submission error:", err);
     res.status(500).json({ success: false, error: err.message });
   }
+});
+
+app.listen(PORT, () => {
+  console.log(`Server listening on port ${PORT}`);
 });
