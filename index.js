@@ -24,18 +24,18 @@ app.post('/deposit/1voucher', async (req, res) => {
 
     const payload = {
       merchantBranchProductNumber: "JQVSND",
-      totalCostInCents: parseInt(amountInCents, 10), // Dynamically uses the exact voucher value
+      totalCostInCents: parseInt(amountInCents, 10),
       transactionDescription: `1Voucher Wallet Deposit - ${userId}`,
       merchantReferenceNumber: `DEP-${Date.now()}`,
       userHostAddress: "127.0.0.1",
-      resultRedirectUrl: "https://backend-475447495901.europe-west1.run.app/wallet-success",
-      callbackUrl: "https://backend-475447495901.europe-west1.run.app/api/1voucher/callback",
+      resultRedirectUrl: "https://muustandibackend.onrender.com/wallet-success",
+      callbackUrl: "https://muustandibackend.onrender.com/api/1voucher/callback",
       cartItems: null,
       paymentChannels: [
         {
           channelName: "OneVoucher",
           settings: {
-            pin: voucherPin // Passes PIN if PAYM8 supports direct channel PIN processing
+            pin: voucherPin
           }
         }
       ],
@@ -52,15 +52,26 @@ app.post('/deposit/1voucher', async (req, res) => {
       body: JSON.stringify(payload)
     });
 
-    const data = await response.json();
-    console.log("PAYM8 Response:", data);
+    // Read response as raw text first to prevent JSON parse crashes
+    const responseText = await response.text();
+    console.log("PAYM8 Status Code:", response.status);
+    console.log("PAYM8 Raw Response:", responseText);
+
+    let data = {};
+    if (responseText && responseText.trim().length > 0) {
+      try {
+        data = JSON.parse(responseText);
+      } catch (parseErr) {
+        console.error("Non-JSON response received from PAYM8:", responseText);
+      }
+    }
 
     if (response.ok && data.redirectUrl) {
       return res.json({ success: true, redirectUri: data.redirectUrl });
     } else {
       return res.status(400).json({ 
         success: false, 
-        error: data.errorMessage || data.message || "Voucher rejected by gateway." 
+        error: data.errorMessage || data.message || responseText || `Gateway returned HTTP status ${response.status}` 
       });
     }
 
