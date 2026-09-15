@@ -20,7 +20,7 @@ app.post('/deposit/1voucher', async (req, res) => {
     }
 
     // Single set of quotes for string definition
-    const authHeader = "Basic " + Buffer.from("IamLizo:1Aml!zo#123").toString("base64");
+const authHeader = "Basic " + Buffer.from("IamLizo:1Aml!zo#123").toString("base64");
 
     const payload = {
       merchantBranchProductNumber: "JQVSND",
