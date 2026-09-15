@@ -11,36 +11,41 @@ app.post('/deposit/1voucher', async (req, res) => {
   try {
     const { amountInCents, userId, voucherPin } = req.body;
 
+    // Validate inputs
     if (!amountInCents || amountInCents < 500) {
-      return res.status(400).json({ success: false, error: "Minimum amount is R5 (500 cents)" });
+      return res.status(400).json({ success: false, error: "Minimum deposit amount is R5 (500 cents)" });
     }
 
     if (!voucherPin) {
       return res.status(400).json({ success: false, error: "Voucher PIN is required" });
     }
 
-    // Single set of quotes for string definition
-const authHeader = "Basic " + Buffer.from("IamLizo:1Aml!zo#123").toString("base64");
+    // Explicitly stringify and trim the PIN to remove white-space/formatting issues
+    const cleanPin = String(voucherPin).trim();
+
+    // Basic Auth Header
+    const authHeader = "Basic " + Buffer.from("IamLizo:1Aml!zo#123").toString("base64");
 
     const payload = {
-  merchantBranchProductNumber: "JQVSND",
-  totalCostInCents: parseInt(amountInCents, 10),
-  transactionDescription: `1Voucher Wallet Deposit - ${userId}`,
-  merchantReferenceNumber: `DEP-${Date.now()}`,
-  userHostAddress: "127.0.0.1",
-  resultCallbackUrl: "https://muustandibackend.onrender.com/wallet-success",
-  notifyCallbackUrl: "https://muustandibackend.onrender.com/api/1voucher/callback",
-  cartItems: null,
-  paymentChannels: [
-    {
-      channelName: "OneVoucher",
-      settings: {
-        pin: voucherPin
-      }
-    }
-  ],
-  merchantClientProfile: "PMV00003"
-};
+      merchantBranchProductNumber: "JQVSND",
+      totalCostInCents: parseInt(amountInCents, 10),
+      transactionDescription: `1Voucher Wallet Deposit - ${userId}`,
+      merchantReferenceNumber: `DEP-${Date.now()}`,
+      userHostAddress: "127.0.0.1",
+      resultCallbackUrl: "https://muustandibackend.onrender.com/wallet-success",
+      notifyCallbackUrl: "https://muustandibackend.onrender.com/api/1voucher/callback",
+      cartItems: null,
+      paymentChannels: [
+        {
+          channelName: "OneVoucher",
+          settings: {
+            pin: cleanPin
+          }
+        }
+      ],
+      merchantClientProfile: "PMV00003"
+    };
+
     const response = await fetch("https://paym8online.com/PaymentsService/api/V1/ecommerce/SubmitPaymentRequest", {
       method: "POST",
       headers: {
@@ -62,18 +67,32 @@ const authHeader = "Basic " + Buffer.from("IamLizo:1Aml!zo#123").toString("base6
       try {
         data = JSON.parse(responseText);
       } catch (parseErr) {
-        console.error("Non-JSON parsing error:", responseText);
+        console.error("Non-JSON response from gateway:", responseText);
       }
     }
 
+    // Return successful redirect URI if gateway responds OK
+    if (response.ok && data.data && data.data.redirectUri) {
+      return res.json({ success: true, redirectUri: data.data.redirectUri });
+    } 
+    
     if (response.ok && data.redirectUrl) {
       return res.json({ success: true, redirectUri: data.redirectUrl });
-    } else {
-      return res.status(400).json({ 
-        success: false, 
-        error: data.errorMessage || data.message || `Gateway returned HTTP status ${response.status}` 
-      });
     }
+
+    // Extract error description if available
+    const gatewayError = 
+      (data.data && data.data.failureReason) ||
+      data.description ||
+      data.errorMessage ||
+      data.message ||
+      `Gateway error (HTTP ${response.status})`;
+
+    return res.status(400).json({
+      success: false,
+      error: gatewayError,
+      raw: data
+    });
 
   } catch (err) {
     console.error("Voucher submission error:", err);
