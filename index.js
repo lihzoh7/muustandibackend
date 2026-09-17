@@ -20,26 +20,28 @@ app.post('/deposit/1voucher', async (req, res) => {
     }
 
     const clientIp = (req.headers['x-forwarded-for'] || req.socket.remoteAddress || "102.165.0.1").split(',')[0].trim();
-    const shortRef = `DEP${Date.now().toString().slice(-10)}`;
-    const authHeader = "Basic " + Buffer.from("IamLizo:1Aml!zo#123").toString("base64");
+    // Replace these two lines in index.js:
+const shortRef = `DEP${Date.now().toString().slice(-8)}_${userId.slice(0, 8)}`;
+const callbackUrlWithUser = `https://muustandibackend.onrender.com/api/1voucher/callback?userId=${userId}`;
 
-    const payload = {
-      merchantBranchProductNumber: "JQVSND",
-      merchantClientProfile: "PMV00003",
-      totalCostInCents: parseInt(amountInCents, 10),
-      transactionDescription: "1Voucher Deposit",
-      merchantReferenceNumber: shortRef,
-      userHostAddress: clientIp,
-      resultCallbackUrl: "https://muustandibackend.onrender.com/wallet-success",
-      callbackUrl: "https://muustandibackend.onrender.com/api/1voucher/callback",
-      paymentChannels: [
-        {
-          channelName: "1Voucher"
-        }
-      ],
-      firstName: firstName || "Gamer",
-      lastName: lastName || "Customer"
-    };
+// Update the payload object:
+const payload = {
+  merchantBranchProductNumber: "JQVSND",
+  merchantClientProfile: "PMV00003",
+  totalCostInCents: parseInt(amountInCents, 10),
+  transactionDescription: "1Voucher Deposit",
+  merchantReferenceNumber: shortRef,
+  userHostAddress: clientIp,
+  resultCallbackUrl: "https://muustandibackend.onrender.com/wallet-success",
+  callbackUrl: callbackUrlWithUser,
+  paymentChannels: [
+    {
+      channelName: "1Voucher"
+    }
+  ],
+  firstName: firstName || "Gamer",
+  lastName: lastName || "Customer"
+};
 
     console.log("Sending Payload to PAYM8:", JSON.stringify(payload));
 
