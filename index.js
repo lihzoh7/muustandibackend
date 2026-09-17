@@ -1,21 +1,11 @@
 const express = require('express');
 const cors = require('cors');
-const admin = require('firebase-admin');
 
 const app = express();
 app.use(cors({ origin: true }));
 app.use(express.json());
 
 const PORT = process.env.PORT || 8080;
-
-// Initialize Firebase Admin (uses default database URL)
-if (!admin.apps.length) {
-  admin.initializeApp({
-    databaseURL: "https://tose-ccf8f-default-rtdb.europe-west1.firebasedatabase.app"
-  });
-}
-
-const db = admin.database();
 
 app.post('/deposit/1voucher', async (req, res) => {
   try {
@@ -27,21 +17,6 @@ app.post('/deposit/1voucher', async (req, res) => {
 
     if (!userId || userId === "GUEST") {
       return res.status(400).json({ success: false, error: "You must be logged in to make a deposit." });
-    }
-
-    // Fetch user details from Realtime Database
-    let firstName = "Gamer";
-    let lastName = "Customer";
-
-    try {
-      const userSnap = await db.ref(`users/${userId}`).once('value');
-      if (userSnap.exists()) {
-        const userData = userSnap.val();
-        firstName = userData.name || "Gamer";
-        lastName = userData.surname || "Customer";
-      }
-    } catch (dbErr) {
-      console.warn("Could not fetch user details from DB, fallback to defaults:", dbErr.message);
     }
 
     // Short reference guaranteed <= 15 characters (DEP + last 10 digits of timestamp)
@@ -63,8 +38,8 @@ app.post('/deposit/1voucher', async (req, res) => {
         }
       ],
       merchantClientProfile: "PMV00003",
-      FirstName: firstName,
-      Lastname: lastName
+      FirstName: "Gamer",
+      Lastname: "Customer"
     };
 
     const response = await fetch("https://paym8online.com/PaymentsService/api/V1/ecommerce/SubmitPaymentRequest", {
