@@ -9,7 +9,7 @@ const PORT = process.env.PORT || 8080;
 
 app.post('/deposit/1voucher', async (req, res) => {
   try {
-    const { amountInCents, userId } = req.body;
+    const { amountInCents, userId, firstName, lastName } = req.body;
 
     if (!amountInCents || amountInCents < 500) {
       return res.status(400).json({ success: false, error: "Minimum deposit amount is R5 (500 cents)" });
@@ -34,12 +34,11 @@ app.post('/deposit/1voucher', async (req, res) => {
       callbackUrl: "https://muustandibackend.onrender.com/api/1voucher/callback",
       paymentChannels: [
         {
-          channelName: "1Voucher",
-          settings: {}
+          channelName: "1Voucher"
         }
       ],
-      firstName: "Gamer",
-      lastName: "Customer"
+      firstName: firstName || "Gamer",
+      lastName: lastName || "Customer"
     };
 
     console.log("Sending Payload to PAYM8:", JSON.stringify(payload));
