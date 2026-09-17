@@ -5,13 +5,17 @@ const app = express();
 
 app.use(cors({ origin: true }));
 app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 
 const PORT = process.env.PORT || 8080;
 
 // PayM8 Authorization header must be stored in Render Environment Variables.
-// Example value in Render:
-// Basic <your-base64-credential>
 const PAYM8_AUTH_HEADER = process.env.PAYM8_AUTH_HEADER;
+
+
+/* =========================================================
+   1. 1VOUCHER DEPOSIT
+   ========================================================= */
 
 app.post('/deposit/1voucher', async (req, res) => {
   try {
@@ -23,7 +27,7 @@ app.post('/deposit/1voucher', async (req, res) => {
     } = req.body;
 
     // --------------------------------------------------
-    // 1. Validate amount
+    // Validate amount
     // --------------------------------------------------
     if (!amountInCents || amountInCents < 500) {
       return res.status(400).json({
@@ -33,7 +37,7 @@ app.post('/deposit/1voucher', async (req, res) => {
     }
 
     // --------------------------------------------------
-    // 2. Validate logged-in user
+    // Validate logged-in user
     // --------------------------------------------------
     if (!userId || userId === 'GUEST') {
       return res.status(400).json({
@@ -43,19 +47,22 @@ app.post('/deposit/1voucher', async (req, res) => {
     }
 
     // --------------------------------------------------
-    // 3. Make sure PayM8 authentication exists
+    // Make sure PayM8 authentication exists
     // --------------------------------------------------
     if (!PAYM8_AUTH_HEADER) {
-      console.error('PAYM8_AUTH_HEADER is not configured.');
+      console.error(
+        'PAYM8_AUTH_HEADER is not configured.'
+      );
 
       return res.status(500).json({
         success: false,
-        error: 'PayM8 authentication is not configured on the server.'
+        error:
+          'PayM8 authentication is not configured on the server.'
       });
     }
 
     // --------------------------------------------------
-    // 4. Get the client IP address
+    // Get client IP address
     // --------------------------------------------------
     const clientIp = (
       req.headers['x-forwarded-for'] ||
@@ -66,49 +73,46 @@ app.post('/deposit/1voucher', async (req, res) => {
       .trim();
 
     // --------------------------------------------------
-    // 5. PayM8 merchant reference
-    //
-    // PayM8 confirmed this must be MAX 15 characters.
-    // This creates a reference such as:
-    // DEP-58040567
+    // PayM8 merchant reference
+    // MAX 15 characters
     // --------------------------------------------------
-    const shortRef = `DEP-${Date.now().toString().slice(-8)}`;
+    const shortRef =
+      `DEP-${Date.now().toString().slice(-8)}`;
 
     // --------------------------------------------------
-    // 6. PayM8 callback URL
-    //
-    // {0} is supplied by PayM8 with the transaction token.
+    // PayM8 callback URL
     // --------------------------------------------------
     const callbackUrl =
       `https://muustandibackend.onrender.com/api/1voucher/callback` +
-      `?userId=${encodeURIComponent(userId)}&token={0}`;
+      `?userId=${encodeURIComponent(userId)}` +
+      `&token={0}`;
 
     // --------------------------------------------------
-    // 7. PayM8 payment request
+    // PayM8 payment request
     // --------------------------------------------------
     const payload = {
       merchantBranchProductNumber: 'JQVSND',
 
       merchantClientProfile: 'PMV00003',
 
-      totalCostInCents: parseInt(amountInCents, 10),
+      totalCostInCents:
+        parseInt(amountInCents, 10),
 
-      transactionDescription: '1Voucher Wallet Deposit',
+      transactionDescription:
+        '1Voucher Wallet Deposit',
 
-      merchantReferenceNumber: shortRef,
+      merchantReferenceNumber:
+        shortRef,
 
-      userHostAddress: clientIp,
+      userHostAddress:
+        clientIp,
 
-      // IMPORTANT:
-      // PayM8 confirmed this field is resultRedirectUrl,
-      // not resultCallbackUrl.
       resultRedirectUrl:
         'https://muustandibackend.onrender.com/wallet-success?token={0}',
 
-      callbackUrl: callbackUrl,
+      callbackUrl:
+        callbackUrl,
 
-      // PayM8's corrected example uses OneVoucher
-      // with settings set to null.
       paymentChannels: [
         {
           channelName: 'OneVoucher',
@@ -116,10 +120,11 @@ app.post('/deposit/1voucher', async (req, res) => {
         }
       ],
 
-      // PayM8's corrected field names.
-      FirstName: firstName || 'Gamer',
+      FirstName:
+        firstName || 'Gamer',
 
-      Lastname: lastName || 'Customer'
+      Lastname:
+        lastName || 'Customer'
     };
 
     console.log(
@@ -128,7 +133,7 @@ app.post('/deposit/1voucher', async (req, res) => {
     );
 
     // --------------------------------------------------
-    // 8. Send request to PayM8
+    // Send request to PayM8
     // --------------------------------------------------
     const response = await fetch(
       'https://paym8online.com/PaymentsService/api/V1/ecommerce/SubmitPaymentRequest',
@@ -146,11 +151,15 @@ app.post('/deposit/1voucher', async (req, res) => {
     );
 
     // --------------------------------------------------
-    // 9. Read PayM8 response safely
+    // Read PayM8 response
     // --------------------------------------------------
-    const responseText = await response.text();
+    const responseText =
+      await response.text();
 
-    console.log('PAYM8 Status Code:', response.status);
+    console.log(
+      'PAYM8 Status Code:',
+      response.status
+    );
 
     console.log(
       'PAYM8 Raw Response:',
@@ -159,7 +168,10 @@ app.post('/deposit/1voucher', async (req, res) => {
 
     let data = {};
 
-    if (responseText && responseText.trim().length > 0) {
+    if (
+      responseText &&
+      responseText.trim().length > 0
+    ) {
       try {
         data = JSON.parse(responseText);
       } catch (parseErr) {
@@ -171,7 +183,7 @@ app.post('/deposit/1voucher', async (req, res) => {
     }
 
     // --------------------------------------------------
-    // 10. Successful PayM8 payment request
+    // Successful PayM8 payment request
     // --------------------------------------------------
     if (
       response.ok &&
@@ -190,16 +202,19 @@ app.post('/deposit/1voucher', async (req, res) => {
 
       return res.json({
         success: true,
-        redirectUri: data.data.redirectUri,
-        token: data.data.token
+        redirectUri:
+          data.data.redirectUri,
+        token:
+          data.data.token
       });
     }
 
     // --------------------------------------------------
-    // 11. PayM8 returned an error
+    // PayM8 returned an error
     // --------------------------------------------------
     const gatewayError =
-      (data.data && data.data.failureReason) ||
+      (data.data &&
+        data.data.failureReason) ||
       data.description ||
       data.errorMessage ||
       `Gateway error (HTTP ${response.status})`;
@@ -215,6 +230,7 @@ app.post('/deposit/1voucher', async (req, res) => {
     });
 
   } catch (err) {
+
     console.error(
       'Voucher submission error:',
       err
@@ -227,11 +243,213 @@ app.post('/deposit/1voucher', async (req, res) => {
   }
 });
 
-// --------------------------------------------------
-// Start server
-// --------------------------------------------------
+
+/* =========================================================
+   2. PAYM8 CALLBACK
+   =========================================================
+   
+   IMPORTANT:
+   This is ONLY a diagnostic callback for now.
+
+   We are NOT adding money to Firebase yet.
+
+   We first need to see exactly what PayM8 sends
+   to this endpoint after the payment.
+   ========================================================= */
+
+function handlePayM8Callback(req, res) {
+
+  console.log('');
+  console.log(
+    '=============================================='
+  );
+  console.log(
+    'PAYM8 CALLBACK RECEIVED'
+  );
+  console.log(
+    '=============================================='
+  );
+
+  console.log(
+    'Callback HTTP Method:',
+    req.method
+  );
+
+  // --------------------------------------------------
+  // Query parameters
+  // --------------------------------------------------
+  console.log(
+    'Callback Query:',
+    JSON.stringify({
+      userId: req.query.userId || null,
+      tokenReceived:
+        !!req.query.token
+    })
+  );
+
+  // --------------------------------------------------
+  // Body
+  // --------------------------------------------------
+  console.log(
+    'Callback Body:',
+    JSON.stringify(req.body || {})
+  );
+
+  console.log(
+    '=============================================='
+  );
+  console.log('');
+
+  // --------------------------------------------------
+  // IMPORTANT:
+  // Do NOT credit wallet yet.
+  // --------------------------------------------------
+
+  return res.status(200).json({
+    received: true
+  });
+}
+
+
+// PayM8 may use POST
+app.post(
+  '/api/1voucher/callback',
+  handlePayM8Callback
+);
+
+
+// Also accept GET for diagnostic purposes
+app.get(
+  '/api/1voucher/callback',
+  handlePayM8Callback
+);
+
+
+/* =========================================================
+   3. PAYM8 RESULT REDIRECT
+   =========================================================
+   
+   This is where PayM8 sends the customer's browser
+   after the hosted payment process.
+
+   This does NOT prove payment by itself.
+   ========================================================= */
+
+app.get('/wallet-success', (req, res) => {
+
+  const token =
+    req.query.token || null;
+
+  console.log('');
+  console.log(
+    '=============================================='
+  );
+  console.log(
+    'PAYM8 RESULT REDIRECT RECEIVED'
+  );
+  console.log(
+    '=============================================='
+  );
+
+  console.log(
+    'Token received:',
+    token ? 'YES' : 'NO'
+  );
+
+  console.log(
+    '=============================================='
+  );
+  console.log('');
+
+  // --------------------------------------------------
+  // DO NOT CREDIT WALLET HERE.
+  // --------------------------------------------------
+
+  res.status(200).send(`
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <meta charset="UTF-8">
+      <title>Payment Verification</title>
+
+      <style>
+        body {
+          margin: 0;
+          min-height: 100vh;
+          display: flex;
+          justify-content: center;
+          align-items: center;
+          background: #001f3f;
+          color: white;
+          font-family: Arial, sans-serif;
+          text-align: center;
+        }
+
+        .box {
+          width: 90%;
+          max-width: 450px;
+          padding: 30px;
+          background: #001428;
+          border-radius: 12px;
+          box-shadow: 0 0 20px rgba(0,0,0,0.5);
+        }
+
+        h1 {
+          color: #00f0ff;
+        }
+
+        p {
+          line-height: 1.6;
+        }
+
+        button {
+          padding: 12px 20px;
+          border: none;
+          border-radius: 6px;
+          background: #00f0ff;
+          color: #001f3f;
+          font-weight: bold;
+          cursor: pointer;
+          margin-top: 15px;
+        }
+      </style>
+    </head>
+
+    <body>
+
+      <div class="box">
+
+        <h1>PAYMENT RECEIVED</h1>
+
+        <p>
+          Your payment process has returned to
+          the Muustandi payment server.
+        </p>
+
+        <p>
+          We are verifying the transaction.
+        </p>
+
+        <button onclick="history.back()">
+          RETURN
+        </button>
+
+      </div>
+
+    </body>
+    </html>
+  `);
+});
+
+
+/* =========================================================
+   4. SERVER START
+   ========================================================= */
+
 app.listen(PORT, () => {
+
   console.log(
     `Server listening on port ${PORT}`
   );
+
 });
