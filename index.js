@@ -6,7 +6,6 @@ app.use(cors({ origin: true }));
 app.use(express.json());
 
 const PORT = process.env.PORT || 8080;
-
 app.post('/deposit/1voucher', async (req, res) => {
   try {
     const { amountInCents, userId, firstName, lastName } = req.body;
