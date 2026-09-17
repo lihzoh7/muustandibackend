@@ -6,6 +6,7 @@ app.use(cors({ origin: true }));
 app.use(express.json());
 
 const PORT = process.env.PORT || 8080;
+
 app.post('/deposit/1voucher', async (req, res) => {
   try {
     const { amountInCents, userId, firstName, lastName } = req.body;
@@ -18,13 +19,11 @@ app.post('/deposit/1voucher', async (req, res) => {
       return res.status(400).json({ success: false, error: "You must be logged in to make a deposit." });
     }
 
-    // 1. Declare authHeader BEFORE creating payload or fetch call
     const authHeader = "Basic " + Buffer.from("IamLizo:1Aml!zo#123").toString("base64");
     const clientIp = (req.headers['x-forwarded-for'] || req.socket.remoteAddress || "102.165.0.1").split(',')[0].trim();
     const shortRef = `DEP${Date.now().toString().slice(-8)}_${userId.slice(0, 8)}`;
     const callbackUrlWithUser = `https://muustandibackend.onrender.com/api/1voucher/callback?userId=${userId}`;
 
-    // 2. Updated channel name string to "OneVoucher" per PAYM8 support
     const payload = {
       merchantBranchProductNumber: "JQVSND",
       merchantClientProfile: "PMV00003",
@@ -93,4 +92,9 @@ app.post('/deposit/1voucher', async (req, res) => {
     console.error("Voucher submission error:", err);
     res.status(500).json({ success: false, error: err.message });
   }
+});
+
+// THIS WAS MISSING — keeps the server process running on Render
+app.listen(PORT, () => {
+  console.log(`Server listening on port ${PORT}`);
 });
