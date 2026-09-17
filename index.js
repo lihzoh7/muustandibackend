@@ -9,41 +9,35 @@ const PORT = process.env.PORT || 8080;
 
 app.post('/deposit/1voucher', async (req, res) => {
   try {
-    const { amountInCents, userId, voucherPin } = req.body;
+    const { amountInCents, userId, firstName, lastName } = req.body;
 
-    // Validate inputs
     if (!amountInCents || amountInCents < 500) {
       return res.status(400).json({ success: false, error: "Minimum deposit amount is R5 (500 cents)" });
     }
 
-    if (!voucherPin) {
-      return res.status(400).json({ success: false, error: "Voucher PIN is required" });
-    }
+    // Generate a reference number guaranteed to be under 15 characters
+    // Example: DEP + last 10 digits of timestamp
+    const shortRef = `DEP-${Date.now().toString().slice(-10)}`;
 
-    // Explicitly stringify and trim the PIN to remove white-space/formatting issues
-    const cleanPin = String(voucherPin).trim();
-
-    // Basic Auth Header
     const authHeader = "Basic " + Buffer.from("IamLizo:1Aml!zo#123").toString("base64");
 
     const payload = {
       merchantBranchProductNumber: "JQVSND",
       totalCostInCents: parseInt(amountInCents, 10),
-      transactionDescription: `1Voucher Wallet Deposit - ${userId}`,
-      merchantReferenceNumber: `DEP-${Date.now()}`,
+      transactionDescription: `1Voucher Deposit - ${userId || 'GUEST'}`,
+      merchantReferenceNumber: shortRef,
       userHostAddress: "127.0.0.1",
-      resultCallbackUrl: "https://muustandibackend.onrender.com/wallet-success",
-      notifyCallbackUrl: "https://muustandibackend.onrender.com/api/1voucher/callback",
-      cartItems: null,
+      resultRedirectUrl: "https://muustandibackend.onrender.com/wallet-success",
+      callbackUrl: "https://muustandibackend.onrender.com/api/1voucher/callback",
       paymentChannels: [
         {
           channelName: "OneVoucher",
-          settings: {
-            pin: cleanPin
-          }
+          settings: null
         }
       ],
-      merchantClientProfile: "PMV00003"
+      merchantClientProfile: "PMV00003",
+      FirstName: firstName || "Gamer",
+      Lastname: lastName || "Customer"
     };
 
     const response = await fetch("https://paym8online.com/PaymentsService/api/V1/ecommerce/SubmitPaymentRequest", {
@@ -71,27 +65,23 @@ app.post('/deposit/1voucher', async (req, res) => {
       }
     }
 
-    // Return successful redirect URI if gateway responds OK
-    if (response.ok && data.data && data.data.redirectUri) {
-      return res.json({ success: true, redirectUri: data.data.redirectUri });
-    } 
-    
-    if (response.ok && data.redirectUrl) {
-      return res.json({ success: true, redirectUri: data.redirectUrl });
+    if (response.ok && data.data && data.data.submitWasSuccessful && data.data.redirectUri) {
+      return res.json({ 
+        success: true, 
+        redirectUri: data.data.redirectUri,
+        token: data.data.token 
+      });
     }
 
-    // Extract error description if available
     const gatewayError = 
       (data.data && data.data.failureReason) ||
       data.description ||
       data.errorMessage ||
-      data.message ||
       `Gateway error (HTTP ${response.status})`;
 
     return res.status(400).json({
       success: false,
-      error: gatewayError,
-      raw: data
+      error: gatewayError
     });
 
   } catch (err) {
