@@ -19,29 +19,27 @@ app.post('/deposit/1voucher', async (req, res) => {
       return res.status(400).json({ success: false, error: "You must be logged in to make a deposit." });
     }
 
-    // Get actual user IP or default to a public IP format
     const clientIp = (req.headers['x-forwarded-for'] || req.socket.remoteAddress || "102.165.0.1").split(',')[0].trim();
-
-    // Short reference <= 15 chars
-    const shortRef = `DEP${Date.now().toString().slice(-11)}`;
+    const shortRef = `DEP${Date.now().toString().slice(-10)}`;
     const authHeader = "Basic " + Buffer.from("IamLizo:1Aml!zo#123").toString("base64");
 
     const payload = {
       merchantBranchProductNumber: "JQVSND",
       merchantClientProfile: "PMV00003",
-      totalCostInCents: Number(amountInCents),
-      transactionDescription: `1Voucher Deposit`,
+      totalCostInCents: parseInt(amountInCents, 10),
+      transactionDescription: "1Voucher Deposit",
       merchantReferenceNumber: shortRef,
       userHostAddress: clientIp,
       resultCallbackUrl: "https://muustandibackend.onrender.com/wallet-success",
       callbackUrl: "https://muustandibackend.onrender.com/api/1voucher/callback",
       paymentChannels: [
         {
-          channelName: "OneVoucher"
+          channelName: "1Voucher",
+          settings: {}
         }
       ],
-      FirstName: "Gamer",
-      Lastname: "Customer"
+      firstName: "Gamer",
+      lastName: "Customer"
     };
 
     console.log("Sending Payload to PAYM8:", JSON.stringify(payload));
