@@ -19,7 +19,7 @@ app.post('/deposit/1voucher', async (req, res) => {
       return res.status(400).json({ success: false, error: "You must be logged in to make a deposit." });
     }
 
-    // Short reference guaranteed <= 15 characters (DEP + last 10 digits of timestamp)
+    // Short reference guaranteed <= 15 characters
     const shortRef = `DEP-${Date.now().toString().slice(-10)}`;
     const authHeader = "Basic " + Buffer.from("IamLizo:1Aml!zo#123").toString("base64");
 
@@ -29,7 +29,7 @@ app.post('/deposit/1voucher', async (req, res) => {
       transactionDescription: `1Voucher Deposit - ${userId}`,
       merchantReferenceNumber: shortRef,
       userHostAddress: "127.0.0.1",
-      resultRedirectUrl: "https://muustandibackend.onrender.com/wallet-success",
+      resultCallbackUrl: "https://muustandibackend.onrender.com/wallet-success", // <--- CHANGED FROM resultRedirectUrl
       callbackUrl: "https://muustandibackend.onrender.com/api/1voucher/callback",
       paymentChannels: [
         {
