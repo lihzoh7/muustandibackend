@@ -179,7 +179,7 @@ async function processSettlement(userId, token) {
     return;
   }
 
-  // Idempotency check: Ensure token hasn't already been processed
+  // 1. Idempotency check: Ensure token hasn't already been processed
   const processedRef = db.ref(`processed_deposits/${token}`);
   const processedSnap = await processedRef.get();
 
@@ -188,7 +188,7 @@ async function processSettlement(userId, token) {
     return;
   }
 
-  // Query PayM8 for payment outcome
+  // 2. Query PayM8 for payment outcome
   const outcomeResponse = await fetch(
     `https://paym8online.com/PaymentsService/api/V1/ecommerce/GetPaymentOutcome/${encodeURIComponent(token)}`,
     {
@@ -202,6 +202,90 @@ async function processSettlement(userId, token) {
 
   const outcomeText = await outcomeResponse.text();
   console.log(`[SETTLEMENT] PayM8 GetPaymentOutcome (${token}):`, outcomeText);
+
+  let outcomeData = {};
+  try {
+    outcomeData = JSON.parse(outcomeText);
+  } catch (e) {
+    console.error('[SETTLEMENT] Failed to parse PayM8 response');
+    return;
+  }
+
+  const data = outcomeData.data || {};
+
+  /* =========================================================
+     STRICT SUCCESS VALIDATION
+     ========================================================= */
+  // Reject explicit failures/faults
+  if (data.outcomeCode === 'Faulted' || (typeof data.outcomeCode === 'string' && data.outcomeCode.toLowerCase().includes('fault'))) {
+    console.warn(`[SETTLEMENT FAILED] Transaction faulted for token ${token}: ${data.outcomeDescription}`);
+    return;
+  }
+
+  // Ensure PayM8 confirmed successful completion
+  const isSuccess = 
+    outcomeData.result === 0 &&
+    (data.outcomeCode === '00' || data.outcomeCode === 0 || data.outcomeCode === 'Success') &&
+    data.lastCompletedStep >= 2;
+
+  if (!isSuccess) {
+    console.warn(`[SETTLEMENT SKIPPED] Outcome not verified as successful for token ${token}. Outcome code: ${data.outcomeCode}`);
+    return;
+  }
+
+  /* =========================================================
+     AMOUNT & TRANSACTION MATCHING
+     ========================================================= */
+  const targetUserId = userId;
+  if (!targetUserId) {
+    console.error(`[SETTLEMENT ERROR] No userId provided in callback for token ${token}`);
+    return;
+  }
+
+  // Look up transaction by merchant reference if available, or extract total cost from outcome response
+  let amountInCents = 0;
+
+  if (data.merchantReference) {
+    const txByRefSnap = await db.ref('transactions')
+      .orderByChild('merchantReference')
+      .equalTo(data.merchantReference)
+      .once('value');
+
+    if (txByRefSnap.exists()) {
+      const txMap = txByRefSnap.val();
+      const firstKey = Object.keys(txMap)[0];
+      amountInCents = txMap[firstKey].amountInCents || 0;
+    }
+  }
+
+  // Fallback to PayM8 returned amount if transaction lookup failed
+  if (!amountInCents && data.totalCostInCents) {
+    amountInCents = parseInt(data.totalCostInCents, 10);
+  }
+
+  if (!amountInCents || amountInCents <= 0) {
+    console.error(`[SETTLEMENT ERROR] Could not determine valid deposit amount for token ${token}. Aborting credit.`);
+    return;
+  }
+
+  const amountInRands = amountInCents / 100;
+
+  // Mark token as processed BEFORE crediting to prevent race conditions
+  await processedRef.set({
+    userId: targetUserId,
+    amountInRands,
+    merchantReference: data.merchantReference || 'UNKNOWN',
+    processedAt: Date.now()
+  });
+
+  // Credit the exact amount to user wallet
+  const walletRef = db.ref(`wallet/${targetUserId}/cashBalance`);
+  await walletRef.transaction((currentBalance) => {
+    return (currentBalance || 0) + amountInRands;
+  });
+
+  console.log(`[SETTLEMENT SUCCESS] Credited R${amountInRands.toFixed(2)} to wallet/${targetUserId}`);
+}
 
   let outcomeData = {};
   try {
