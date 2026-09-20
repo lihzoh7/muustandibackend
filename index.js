@@ -24,7 +24,6 @@ if (
       credential: admin.credential.cert({
         projectId: process.env.FIREBASE_PROJECT_ID,
         clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
-        // Ensure formatted private key line-breaks are replaced correctly
         privateKey: process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, '\n')
       }),
       databaseURL: "https://tose-ccf8f-default-rtdb.europe-west1.firebasedatabase.app"
@@ -136,7 +135,6 @@ app.post('/deposit/1voucher', async (req, res) => {
     ) {
       console.log('PAYM8 payment request successful.');
 
-      // Pre-save pending transaction record in Firebase
       if (db && data.data.token) {
         await db.ref(`transactions/${data.data.token}`).set({
           userId,
@@ -179,7 +177,7 @@ async function processSettlement(userId, token) {
     return;
   }
 
-  // 1. Idempotency check: Ensure token hasn't already been processed
+  // Idempotency check: Ensure token hasn't already been processed
   const processedRef = db.ref(`processed_deposits/${token}`);
   const processedSnap = await processedRef.get();
 
@@ -188,7 +186,7 @@ async function processSettlement(userId, token) {
     return;
   }
 
-  // 2. Query PayM8 for payment outcome
+  // Query PayM8 for payment outcome
   const outcomeResponse = await fetch(
     `https://paym8online.com/PaymentsService/api/V1/ecommerce/GetPaymentOutcome/${encodeURIComponent(token)}`,
     {
@@ -213,9 +211,6 @@ async function processSettlement(userId, token) {
 
   const data = outcomeData.data || {};
 
-  /* =========================================================
-     STRICT SUCCESS VALIDATION
-     ========================================================= */
   // Reject explicit failures/faults
   if (data.outcomeCode === 'Faulted' || (typeof data.outcomeCode === 'string' && data.outcomeCode.toLowerCase().includes('fault'))) {
     console.warn(`[SETTLEMENT FAILED] Transaction faulted for token ${token}: ${data.outcomeDescription}`);
@@ -233,16 +228,12 @@ async function processSettlement(userId, token) {
     return;
   }
 
-  /* =========================================================
-     AMOUNT & TRANSACTION MATCHING
-     ========================================================= */
   const targetUserId = userId;
   if (!targetUserId) {
     console.error(`[SETTLEMENT ERROR] No userId provided in callback for token ${token}`);
     return;
   }
 
-  // Look up transaction by merchant reference if available, or extract total cost from outcome response
   let amountInCents = 0;
 
   if (data.merchantReference) {
@@ -258,7 +249,6 @@ async function processSettlement(userId, token) {
     }
   }
 
-  // Fallback to PayM8 returned amount if transaction lookup failed
   if (!amountInCents && data.totalCostInCents) {
     amountInCents = parseInt(data.totalCostInCents, 10);
   }
@@ -270,7 +260,7 @@ async function processSettlement(userId, token) {
 
   const amountInRands = amountInCents / 100;
 
-  // Mark token as processed BEFORE crediting to prevent race conditions
+  // Lock processed token before crediting
   await processedRef.set({
     userId: targetUserId,
     amountInRands,
@@ -278,71 +268,10 @@ async function processSettlement(userId, token) {
     processedAt: Date.now()
   });
 
-  // Credit the exact amount to user wallet
+  // Credit user wallet
   const walletRef = db.ref(`wallet/${targetUserId}/cashBalance`);
   await walletRef.transaction((currentBalance) => {
     return (currentBalance || 0) + amountInRands;
-  });
-
-  console.log(`[SETTLEMENT SUCCESS] Credited R${amountInRands.toFixed(2)} to wallet/${targetUserId}`);
-}
-
-  let outcomeData = {};
-  try {
-    outcomeData = JSON.parse(outcomeText);
-  } catch (e) {
-    console.error('[SETTLEMENT] Failed to parse PayM8 response');
-    return;
-  }
-
-  const data = outcomeData.data || {};
-  
-  // PayM8 success indicator checks:
-  // result === 0 and (outcomeCode is success or step indicates completed redeem)
-  const isSuccess = outcomeData.result === 0 && (
-    data.outcomeCode === '00' ||
-    data.outcomeCode === 0 ||
-    data.lastCompletedStep >= 2 ||
-    outcomeData.resultToString === 'Success'
-  );
-
-  if (!isSuccess) {
-    console.warn(`[SETTLEMENT] Payment outcome not verified as successful for token ${token}`);
-    return;
-  }
-
-  // Retrieve pending transaction details or fallback to user query
-  const txRef = db.ref(`transactions/${token}`);
-  const txSnap = await txRef.get();
-  const txData = txSnap.val() || {};
-
-  const targetUserId = userId || txData.userId;
-  const amountInCents = txData.amountInCents || 500; // Default R5 if missing
-  const amountInRands = amountInCents / 100;
-
-  if (!targetUserId) {
-    console.error(`[SETTLEMENT] No userId found for transaction token ${token}`);
-    return;
-  }
-
-  // Mark token as processed FIRST to lock execution thread
-  await processedRef.set({
-    userId: targetUserId,
-    amountInRands,
-    processedAt: Date.now()
-  });
-
-  // Increment user wallet cashBalance atomically
-  const walletRef = db.ref(`wallet/${targetUserId}/cashBalance`);
-  await walletRef.transaction((currentBalance) => {
-    return (currentBalance || 0) + amountInRands;
-  });
-
-  // Update transaction status in Firebase
-  await txRef.update({
-    status: 'COMPLETED',
-    completedAt: Date.now(),
-    creditedAmount: amountInRands
   });
 
   console.log(`[SETTLEMENT SUCCESS] Credited R${amountInRands.toFixed(2)} to wallet/${targetUserId}`);
@@ -354,10 +283,8 @@ async function handlePayM8Callback(req, res) {
 
   console.log('PAYM8 CALLBACK RECEIVED:', { userId, token, method: req.method });
 
-  // Acknowledge PayM8 request instantly so connection doesn't time out
   res.status(200).json({ received: true });
 
-  // Process outcome & wallet crediting asynchronously
   if (token) {
     try {
       await processSettlement(userId, token);
@@ -379,7 +306,6 @@ app.get('/wallet-success', async (req, res) => {
   const token = req.query.token || null;
 
   if (token && db) {
-    // Attempt settlement check when user lands back on success page
     try {
       const txSnap = await db.ref(`transactions/${token}`).get();
       if (txSnap.exists()) {
