@@ -246,15 +246,6 @@ app.post('/deposit/1voucher', async (req, res) => {
 
 /* =========================================================
    2. PAYM8 CALLBACK
-   =========================================================
-   
-   IMPORTANT:
-   This is ONLY a diagnostic callback for now.
-
-   We are NOT adding money to Firebase yet.
-
-   We first need to see exactly what PayM8 sends
-   to this endpoint after the payment.
    ========================================================= */
 
 function handlePayM8Callback(req, res) {
@@ -275,9 +266,6 @@ function handlePayM8Callback(req, res) {
     req.method
   );
 
-  // --------------------------------------------------
-  // Query parameters
-  // --------------------------------------------------
   console.log(
     'Callback Query:',
     JSON.stringify({
@@ -287,9 +275,6 @@ function handlePayM8Callback(req, res) {
     })
   );
 
-  // --------------------------------------------------
-  // Body
-  // --------------------------------------------------
   console.log(
     'Callback Body:',
     JSON.stringify(req.body || {})
@@ -327,12 +312,6 @@ app.get(
 
 /* =========================================================
    3. PAYM8 RESULT REDIRECT
-   =========================================================
-   
-   This is where PayM8 sends the customer's browser
-   after the hosted payment process.
-
-   This does NOT prove payment by itself.
    ========================================================= */
 
 app.get('/wallet-success', (req, res) => {
@@ -443,7 +422,156 @@ app.get('/wallet-success', (req, res) => {
 
 
 /* =========================================================
-   4. SERVER START
+   4. TEMPORARY PAYM8 PAYMENT OUTCOME TEST
+   =========================================================
+   
+   This route is ONLY for diagnosing the current
+   PayM8 transaction.
+
+   It uses PAYM8_AUTH_HEADER from Render.
+   
+   DO NOT enter your PayM8 username/password in
+   the browser.
+
+   REMOVE THIS ROUTE AFTER WE FINISH TESTING.
+   ========================================================= */
+
+app.get('/debug/payment-outcome', async (req, res) => {
+
+  try {
+
+    const token =
+      req.query.token;
+
+    // --------------------------------------------------
+    // Check token
+    // --------------------------------------------------
+    if (!token) {
+
+      return res.status(400).json({
+        success: false,
+        error: 'Missing transaction token.'
+      });
+
+    }
+
+    // --------------------------------------------------
+    // Check PayM8 authentication
+    // --------------------------------------------------
+    if (!PAYM8_AUTH_HEADER) {
+
+      console.error(
+        'PAYM8_AUTH_HEADER is not configured.'
+      );
+
+      return res.status(500).json({
+        success: false,
+        error:
+          'PayM8 authentication is not configured on the server.'
+      });
+
+    }
+
+    console.log('');
+    console.log(
+      '=============================================='
+    );
+    console.log(
+      'PAYM8 GET PAYMENT OUTCOME TEST'
+    );
+    console.log(
+      '=============================================='
+    );
+
+    console.log(
+      'Transaction token received:',
+      token
+    );
+
+    // --------------------------------------------------
+    // Call PayM8
+    // --------------------------------------------------
+    const outcomeResponse = await fetch(
+      `https://paym8online.com/PaymentsService/api/V1/ecommerce/GetPaymentOutcome/${encodeURIComponent(token)}`,
+      {
+        method: 'GET',
+
+        headers: {
+          'Accept': 'application/json',
+          'Authorization': PAYM8_AUTH_HEADER
+        }
+      }
+    );
+
+    const outcomeText =
+      await outcomeResponse.text();
+
+    console.log(
+      'PayM8 Outcome HTTP Status:',
+      outcomeResponse.status
+    );
+
+    console.log(
+      'PayM8 Outcome Response:',
+      outcomeText
+    );
+
+    console.log(
+      '=============================================='
+    );
+    console.log('');
+
+    // --------------------------------------------------
+    // Try to return JSON if PayM8 sent JSON
+    // --------------------------------------------------
+    let outcomeData;
+
+    try {
+
+      outcomeData =
+        JSON.parse(outcomeText);
+
+    } catch (parseErr) {
+
+      outcomeData = {
+        rawResponse:
+          outcomeText
+      };
+    }
+
+    return res.status(
+      outcomeResponse.ok ? 200 : outcomeResponse.status
+    ).json({
+
+      success:
+        outcomeResponse.ok,
+
+      paym8HttpStatus:
+        outcomeResponse.status,
+
+      outcome:
+        outcomeData
+
+    });
+
+  } catch (err) {
+
+    console.error(
+      'Get Payment Outcome error:',
+      err
+    );
+
+    return res.status(500).json({
+      success: false,
+      error: err.message
+    });
+  }
+
+});
+
+
+/* =========================================================
+   5. SERVER START
    ========================================================= */
 
 app.listen(PORT, () => {
