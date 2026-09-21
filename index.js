@@ -358,3 +358,23 @@ app.get('/wallet-success', async (req, res) => {
     
       
       Payment Verification
+      
+    
+    
+PAYMENT PROCESSED
+Your payment has been processed and verified.
+
+Return to your wallet to view your updated balance.
+
+RETURN TO WALLET
+
+`);
+});
+
+/* =========================================================
+4. SERVER START
+========================================================= */
+
+app.listen(PORT, () => {
+console.log(Server listening on port ${PORT});
+});
