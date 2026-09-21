@@ -9,372 +9,1707 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
 const PORT = process.env.PORT || 8080;
-const PAYM8_AUTH_HEADER = process.env.PAYM8_AUTH_HEADER;
+
+
+/* =========================================================
+   ENVIRONMENT VARIABLES
+   ========================================================= */
+
+const PAYM8_AUTH_HEADER =
+  process.env.PAYM8_AUTH_HEADER;
+
+const FIREBASE_PROJECT_ID =
+  process.env.FIREBASE_PROJECT_ID;
+
+const FIREBASE_CLIENT_EMAIL =
+  process.env.FIREBASE_CLIENT_EMAIL;
+
+const FIREBASE_PRIVATE_KEY =
+  process.env.FIREBASE_PRIVATE_KEY;
+
 
 /* =========================================================
    FIREBASE ADMIN INITIALIZATION
    ========================================================= */
-if (
-  process.env.FIREBASE_PROJECT_ID &&
-  process.env.FIREBASE_CLIENT_EMAIL &&
-  process.env.FIREBASE_PRIVATE_KEY
-) {
-  try {
+
+let firebaseReady = false;
+
+try {
+
+  if (
+    FIREBASE_PROJECT_ID &&
+    FIREBASE_CLIENT_EMAIL &&
+    FIREBASE_PRIVATE_KEY
+  ) {
+
+    const privateKey =
+      FIREBASE_PRIVATE_KEY.replace(/\\n/g, '\n');
+
     admin.initializeApp({
       credential: admin.credential.cert({
-        projectId: process.env.FIREBASE_PROJECT_ID,
-        clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
-        privateKey: process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, '\n')
-      }),
-      databaseURL: "https://tose-ccf8f-default-rtdb.europe-west1.firebasedatabase.app"
+        projectId: FIREBASE_PROJECT_ID,
+        clientEmail: FIREBASE_CLIENT_EMAIL,
+        privateKey: privateKey
+      })
     });
-    console.log('Firebase Admin initialized successfully.');
-  } catch (fbErr) {
-    console.error('Firebase Admin initialization error:', fbErr.message);
+
+    firebaseReady = true;
+
+    console.log(
+      'Firebase Admin initialized successfully.'
+    );
+
+  } else {
+
+    console.error(
+      'Firebase environment variables are missing.'
+    );
+
   }
-} else {
-  console.warn('Firebase environment variables missing. Wallet crediting will fail.');
+
+} catch (err) {
+
+  console.error(
+    'Firebase Admin initialization failed:',
+    err
+  );
+
 }
 
-const db = admin.apps.length ? admin.database() : null;
 
-// Helper: Pause execution for delayed polling
-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const db = firebaseReady
+  ? admin.database()
+  : null;
+
 
 /* =========================================================
-   1. 1VOUCHER DEPOSIT INITIATION
+   CONSTANTS
    ========================================================= */
+
+const PAYM8_SUBMIT_URL =
+  'https://paym8online.com/PaymentsService/api/V1/ecommerce/SubmitPaymentRequest';
+
+const PAYM8_OUTCOME_URL =
+  'https://paym8online.com/PaymentsService/api/V1/ecommerce/GetPaymentOutcome';
+
+
+/* =========================================================
+   HELPER: CHECK REQUIRED SERVICES
+   ========================================================= */
+
+function servicesReady() {
+
+  return (
+    firebaseReady &&
+    !!PAYM8_AUTH_HEADER
+  );
+
+}
+
+
+/* =========================================================
+   HELPER: CALL PAYM8 GET PAYMENT OUTCOME
+   ========================================================= */
+
+async function getPaym8Outcome(token) {
+
+  if (!token) {
+
+    throw new Error(
+      'Missing PayM8 transaction token.'
+    );
+
+  }
+
+  if (!PAYM8_AUTH_HEADER) {
+
+    throw new Error(
+      'PAYM8_AUTH_HEADER is not configured.'
+    );
+
+  }
+
+  const url =
+    `${PAYM8_OUTCOME_URL}/${encodeURIComponent(token)}`;
+
+  console.log('');
+  console.log(
+    '----------------------------------------------'
+  );
+  console.log(
+    'GETTING PAYM8 PAYMENT OUTCOME'
+  );
+  console.log(
+    'Token:',
+    token
+  );
+  console.log(
+    '----------------------------------------------'
+  );
+
+  const response = await fetch(
+    url,
+    {
+      method: 'GET',
+
+      headers: {
+        'Accept': 'application/json',
+        'Authorization': PAYM8_AUTH_HEADER
+      }
+    }
+  );
+
+  const responseText =
+    await response.text();
+
+  console.log(
+    'PayM8 Outcome HTTP Status:',
+    response.status
+  );
+
+  console.log(
+    'PayM8 Outcome Raw Response:',
+    responseText
+  );
+
+  let data = {};
+
+  if (
+    responseText &&
+    responseText.trim().length > 0
+  ) {
+
+    try {
+
+      data = JSON.parse(responseText);
+
+    } catch (err) {
+
+      data = {
+        rawResponse: responseText
+      };
+
+    }
+
+  }
+
+  return {
+    httpStatus: response.status,
+    httpOk: response.ok,
+    data: data
+  };
+
+}
+
+
+/* =========================================================
+   HELPER: INTERPRET PAYM8 OUTCOME
+   ========================================================= */
+
+function interpretPaym8Outcome(outcomeResponse) {
+
+  const root =
+    outcomeResponse.data || {};
+
+  const data =
+    root.data || {};
+
+  const lastCompletedStep =
+    data.lastCompletedStep ?? null;
+
+  const outcomeCode =
+    data.outcomeCode ?? null;
+
+  const outcomeDescription =
+    data.outcomeDescription ?? '';
+
+  const errorSourceSystem =
+    data.errorSourceSystem ?? null;
+
+  const errorCodes =
+    data.errorCodes ?? [];
+
+  /*
+   * IMPORTANT:
+   *
+   * We deliberately do NOT treat:
+   *
+   * result: 0
+   *
+   * as payment success.
+   *
+   * We also do NOT treat:
+   *
+   * lastCompletedStep: 1
+   *
+   * as payment success.
+   *
+   * The current problem we are investigating is
+   * exactly that PayM8 can return HTTP 200 / result 0
+   * while outcomeCode is still null.
+   */
+
+  if (
+    outcomeCode !== null &&
+    outcomeCode !== undefined &&
+    String(outcomeCode).trim() !== ''
+  ) {
+
+    return {
+      status: 'OUTCOME_RECEIVED',
+      safeToCredit: false,
+      lastCompletedStep,
+      outcomeCode,
+      outcomeDescription,
+      errorSourceSystem,
+      errorCodes
+    };
+
+  }
+
+  return {
+    status: 'PENDING',
+    safeToCredit: false,
+    lastCompletedStep,
+    outcomeCode,
+    outcomeDescription,
+    errorSourceSystem,
+    errorCodes
+  };
+
+}
+
+
+/* =========================================================
+   HELPER: SAVE TRANSACTION
+   ========================================================= */
+
+async function saveTransaction(
+  merchantReference,
+  transactionData
+) {
+
+  if (!db) {
+
+    throw new Error(
+      'Firebase is not initialized.'
+    );
+
+  }
+
+  const ref =
+    db.ref(
+      `paymentTransactions/${merchantReference}`
+    );
+
+  await ref.set({
+    ...transactionData,
+
+    merchantReference,
+
+    createdAt:
+      transactionData.createdAt ||
+      new Date().toISOString(),
+
+    updatedAt:
+      new Date().toISOString(),
+
+    walletCredited: false,
+
+    status:
+      transactionData.status ||
+      'CREATED'
+  });
+
+}
+
+
+/* =========================================================
+   HELPER: FIND TRANSACTION BY TOKEN
+   ========================================================= */
+
+async function findTransactionByToken(token) {
+
+  if (!db) {
+
+    throw new Error(
+      'Firebase is not initialized.'
+    );
+
+  }
+
+  const snapshot =
+    await db
+      .ref('paymentTransactions')
+      .orderByChild('token')
+      .equalTo(token)
+      .once('value');
+
+  if (!snapshot.exists()) {
+
+    return null;
+
+  }
+
+  let result = null;
+
+  snapshot.forEach(child => {
+
+    if (!result) {
+
+      result = {
+        key: child.key,
+        ...child.val()
+      };
+
+    }
+
+  });
+
+  return result;
+
+}
+
+
+/* =========================================================
+   HELPER: UPDATE TRANSACTION
+   ========================================================= */
+
+async function updateTransaction(
+  merchantReference,
+  updates
+) {
+
+  if (!db) {
+
+    throw new Error(
+      'Firebase is not initialized.'
+    );
+
+  }
+
+  await db
+    .ref(
+      `paymentTransactions/${merchantReference}`
+    )
+    .update({
+      ...updates,
+      updatedAt:
+        new Date().toISOString()
+    });
+
+}
+
+
+/* =========================================================
+   1. HEALTH CHECK
+   ========================================================= */
+
+app.get('/health', (req, res) => {
+
+  res.status(200).json({
+
+    success: true,
+
+    server: 'online',
+
+    firebaseConfigured:
+      firebaseReady,
+
+    paym8Configured:
+      !!PAYM8_AUTH_HEADER,
+
+    timestamp:
+      new Date().toISOString()
+
+  });
+
+});
+
+
+/* =========================================================
+   2. 1VOUCHER DEPOSIT
+   ========================================================= */
+
 app.post('/deposit/1voucher', async (req, res) => {
+
   try {
-    const { amountInCents, userId, firstName, lastName } = req.body;
 
-    if (!amountInCents || amountInCents < 500) {
+    const {
+      amountInCents,
+      userId,
+      firstName,
+      lastName
+    } = req.body;
+
+
+    /* -----------------------------------------------------
+       VALIDATION
+       ----------------------------------------------------- */
+
+    if (
+      !amountInCents ||
+      Number(amountInCents) < 500
+    ) {
+
       return res.status(400).json({
+
         success: false,
-        error: 'Minimum deposit amount is R5 (500 cents)'
+
+        error:
+          'Minimum deposit amount is R5 (500 cents).'
+
       });
+
     }
 
-    if (!userId || userId === 'GUEST') {
+
+    if (
+      !userId ||
+      userId === 'GUEST'
+    ) {
+
       return res.status(400).json({
+
         success: false,
-        error: 'You must be logged in to make a deposit.'
+
+        error:
+          'You must be logged in to make a deposit.'
+
       });
+
     }
+
+
+    if (!firebaseReady) {
+
+      return res.status(500).json({
+
+        success: false,
+
+        error:
+          'Firebase is not configured on the backend.'
+
+      });
+
+    }
+
 
     if (!PAYM8_AUTH_HEADER) {
-      console.error('PAYM8_AUTH_HEADER is not configured.');
+
       return res.status(500).json({
+
         success: false,
-        error: 'PayM8 authentication is not configured on the server.'
+
+        error:
+          'PayM8 authentication is not configured.'
+
       });
+
     }
 
-    const clientIp = (
-      req.headers['x-forwarded-for'] ||
-      req.socket.remoteAddress ||
-      '127.0.0.1'
-    ).split(',')[0].trim();
 
-    const shortRef = `DEP-${Date.now().toString().slice(-8)}`;
+    /* -----------------------------------------------------
+       NORMALIZE AMOUNT
+       ----------------------------------------------------- */
+
+    const depositCents =
+      parseInt(amountInCents, 10);
+
+
+    if (
+      !Number.isInteger(depositCents) ||
+      depositCents < 500
+    ) {
+
+      return res.status(400).json({
+
+        success: false,
+
+        error:
+          'Invalid deposit amount.'
+
+      });
+
+    }
+
+
+    /* -----------------------------------------------------
+       GET CLIENT IP
+       ----------------------------------------------------- */
+
+    const clientIp = (
+
+      req.headers['x-forwarded-for'] ||
+
+      req.socket.remoteAddress ||
+
+      '127.0.0.1'
+
+    )
+      .split(',')[0]
+      .trim();
+
+
+    /* -----------------------------------------------------
+       MERCHANT REFERENCE
+       MAX 15 CHARACTERS
+       ----------------------------------------------------- */
+
+    const shortRef =
+      `DEP-${Date.now().toString().slice(-8)}`;
+
+
+    /* -----------------------------------------------------
+       CALLBACK URL
+       ----------------------------------------------------- */
 
     const callbackUrl =
       `https://muustandibackend.onrender.com/api/1voucher/callback` +
       `?userId=${encodeURIComponent(userId)}` +
       `&token={0}`;
 
-    const payload = {
-      merchantBranchProductNumber: 'JQVSND',
-      merchantClientProfile: 'PMV00003',
-      totalCostInCents: parseInt(amountInCents, 10),
-      transactionDescription: '1Voucher Wallet Deposit',
-      merchantReferenceNumber: shortRef,
-      userHostAddress: clientIp,
-      resultRedirectUrl: 'https://muustandibackend.onrender.com/wallet-success?token={0}',
-      callbackUrl: callbackUrl,
-      paymentChannels: [
-        {
-          channelName: 'OneVoucher',
-          settings: null
-        }
-      ],
-      FirstName: firstName || 'Gamer',
-      Lastname: lastName || 'Customer'
-    };
 
-    console.log('Sending Payload to PAYM8:', JSON.stringify(payload));
+    /* -----------------------------------------------------
+       CREATE TRANSACTION RECORD BEFORE PAYM8
+       ----------------------------------------------------- */
 
-    const response = await fetch(
-      'https://paym8online.com/PaymentsService/api/V1/ecommerce/SubmitPaymentRequest',
+    await saveTransaction(
+
+      shortRef,
+
       {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Accept': 'application/json',
-          'Authorization': PAYM8_AUTH_HEADER
-        },
-        body: JSON.stringify(payload)
+
+        userId,
+
+        amountInCents:
+          depositCents,
+
+        amountRand:
+          depositCents / 100,
+
+        firstName:
+          firstName || 'Gamer',
+
+        lastName:
+          lastName || 'Customer',
+
+        status:
+          'CREATED',
+
+        token:
+          null,
+
+        walletCredited:
+          false
+
       }
+
     );
 
-    const responseText = await response.text();
-    console.log('PAYM8 Status Code:', response.status);
-    console.log('PAYM8 Raw Response:', responseText);
 
-    let data = {};
-    if (responseText && responseText.trim().length > 0) {
-      try {
-        data = JSON.parse(responseText);
-      } catch (parseErr) {
-        console.error('Non-JSON response from gateway:', responseText);
-      }
-    }
-
-    if (
-      response.ok &&
-      data.data &&
-      data.data.submitWasSuccessful &&
-      data.data.redirectUri
-    ) {
-      console.log('PAYM8 payment request successful.');
-
-      // Record pending deposit in Firebase for downstream lookup/recovery
-      if (db && data.data.token) {
-        await db.ref(`transactions/${data.data.token}`).set({
-          userId,
-          amountInCents: parseInt(amountInCents, 10),
-          merchantReference: shortRef,
-          status: 'PENDING',
-          createdAt: Date.now()
-        });
-      }
-
-      return res.json({
-        success: true,
-        redirectUri: data.data.redirectUri,
-        token: data.data.token
-      });
-    }
-
-    const gatewayError =
-      (data.data && data.data.failureReason) ||
-      data.description ||
-      data.errorMessage ||
-      `Gateway error (HTTP ${response.status})`;
-
-    return res.status(400).json({ success: false, error: gatewayError });
-
-  } catch (err) {
-    console.error('Voucher submission error:', err);
-    return res.status(500).json({ success: false, error: err.message });
-  }
-});
+    console.log('');
+    console.log(
+      '=============================================='
+    );
+    console.log(
+      'NEW 1VOUCHER TRANSACTION'
+    );
+    console.log(
+      'Merchant Reference:',
+      shortRef
+    );
+    console.log(
+      'User ID:',
+      userId
+    );
+    console.log(
+      'Amount:',
+      `R${(depositCents / 100).toFixed(2)}`
+    );
+    console.log(
+      '=============================================='
+    );
 
 
-/* =========================================================
-   2. PAYM8 CALLBACK & AUTOMATIC SETTLEMENT (WITH RECOVERY)
-   ========================================================= */
+    /* -----------------------------------------------------
+       PAYM8 PAYMENT REQUEST
+       ----------------------------------------------------- */
 
-async function processSettlement(userId, token) {
-  if (!db) {
-    console.error('Cannot process settlement: Firebase DB not initialized.');
-    return;
-  }
+    const payload = {
 
-  // Idempotency check: Ensure token is never credited twice
-  const processedRef = db.ref(`processed_deposits/${token}`);
-  const processedSnap = await processedRef.get();
+      merchantBranchProductNumber:
+        'JQVSND',
 
-  if (processedSnap.exists()) {
-    console.log(`[SETTLEMENT] Token ${token} already processed. Skipping duplicate credit.`);
-    return;
-  }
+      merchantClientProfile:
+        'PMV00003',
 
-  let outcomeData = {};
-  let data = {};
-  let attempts = 0;
-  const maxAttempts = 5;
+      totalCostInCents:
+        depositCents,
 
-  // Step A: Poll PayM8 up to 5 times (3-second delays = 15s window)
-  while (attempts < maxAttempts) {
-    attempts++;
-    console.log(`[SETTLEMENT] Querying PayM8 outcome for token \({token} (Attempt\){attempts}/${maxAttempts})...`);
+      transactionDescription:
+        '1Voucher Wallet Deposit',
 
-    try {
-      const outcomeResponse = await fetch(
-        `https://paym8online.com/PaymentsService/api/V1/ecommerce/GetPaymentOutcome/${encodeURIComponent(token)}`,
+      merchantReferenceNumber:
+        shortRef,
+
+      userHostAddress:
+        clientIp,
+
+      resultRedirectUrl:
+        'https://muustandibackend.onrender.com/wallet-success?token={0}',
+
+      callbackUrl:
+        callbackUrl,
+
+      paymentChannels: [
+
         {
-          method: 'GET',
+
+          channelName:
+            'OneVoucher',
+
+          settings:
+            null
+
+        }
+
+      ],
+
+      FirstName:
+        firstName || 'Gamer',
+
+      Lastname:
+        lastName || 'Customer'
+
+    };
+
+
+    console.log(
+      'Sending Payload to PAYM8:'
+    );
+
+    console.log(
+      JSON.stringify(payload)
+    );
+
+
+    /* -----------------------------------------------------
+       SEND TO PAYM8
+       ----------------------------------------------------- */
+
+    const response =
+      await fetch(
+        PAYM8_SUBMIT_URL,
+        {
+
+          method: 'POST',
+
           headers: {
-            'Accept': 'application/json',
-            'Authorization': PAYM8_AUTH_HEADER
-          }
+
+            'Content-Type':
+              'application/json',
+
+            'Accept':
+              'application/json',
+
+            'Authorization':
+              PAYM8_AUTH_HEADER
+
+          },
+
+          body:
+            JSON.stringify(payload)
+
         }
       );
 
-      const outcomeText = await outcomeResponse.text();
-      outcomeData = JSON.parse(outcomeText);
-      data = outcomeData.data || {};
-    } catch (e) {
-      console.error('[SETTLEMENT] Failed to parse PayM8 response:', e.message);
+
+    const responseText =
+      await response.text();
+
+
+    console.log(
+      'PAYM8 Submit HTTP Status:',
+      response.status
+    );
+
+    console.log(
+      'PAYM8 Submit Raw Response:',
+      responseText
+    );
+
+
+    let data = {};
+
+
+    if (
+      responseText &&
+      responseText.trim().length > 0
+    ) {
+
+      try {
+
+        data =
+          JSON.parse(responseText);
+
+      } catch (err) {
+
+        console.error(
+          'Could not parse PayM8 response as JSON.'
+        );
+
+      }
+
     }
 
-    // Stop polling early if PayM8 officially completed step 2 or returned a failure code
-    if (data.lastCompletedStep >= 2 || data.outcomeCode === '00' || data.outcomeCode === 0) {
-      break;
+
+    /* -----------------------------------------------------
+       PAYM8 REQUEST FAILED
+       ----------------------------------------------------- */
+
+    if (
+      !response.ok ||
+      !data.data ||
+      !data.data.submitWasSuccessful ||
+      !data.data.redirectUri
+    ) {
+
+      const gatewayError =
+
+        (
+          data.data &&
+          data.data.failureReason
+        ) ||
+
+        data.description ||
+
+        data.errorMessage ||
+
+        `Gateway error (HTTP ${response.status})`;
+
+
+      await updateTransaction(
+
+        shortRef,
+
+        {
+
+          status:
+            'SUBMIT_FAILED',
+
+          submitHttpStatus:
+            response.status,
+
+          submitResponse:
+            data,
+
+          error:
+            gatewayError
+
+        }
+
+      );
+
+
+      console.error(
+        'PAYM8 payment request failed:',
+        gatewayError
+      );
+
+
+      return res.status(400).json({
+
+        success: false,
+
+        error:
+          gatewayError
+
+      });
+
     }
 
-    if (attempts < maxAttempts) {
-      await sleep(3000);
-    }
+
+    /* -----------------------------------------------------
+       SAVE PAYM8 TOKEN
+       ----------------------------------------------------- */
+
+    const token =
+      data.data.token || null;
+
+
+    await updateTransaction(
+
+      shortRef,
+
+      {
+
+        status:
+          'REDIRECTED_TO_PAYM8',
+
+        token:
+
+          token ||
+
+          null,
+
+        paym8SubmitResponse:
+          data
+
+      }
+
+    );
+
+
+    console.log(
+      'PAYM8 payment request accepted.'
+    );
+
+    console.log(
+      'PAYM8 Redirect:',
+      data.data.redirectUri
+    );
+
+    console.log(
+      'PAYM8 Token:',
+      token || 'NOT RETURNED'
+    );
+
+
+    return res.json({
+
+      success: true,
+
+      redirectUri:
+        data.data.redirectUri,
+
+      token:
+        token
+
+    });
+
+
+  } catch (err) {
+
+    console.error(
+      'Voucher submission error:',
+      err
+    );
+
+
+    return res.status(500).json({
+
+      success: false,
+
+      error:
+        err.message
+
+    });
+
   }
 
-  // Step B: Evaluate Standard Success
-  const isStandardSuccess = 
-    outcomeData.result === 0 &&
-    (data.outcomeCode === '00' || data.outcomeCode === 0 || data.outcomeCode === 'Success') &&
-    data.lastCompletedStep >= 2;
-
-  // Step C: Look up local transaction record for Recovery Settlement
-  let targetUserId = userId;
-  let amountInCents = 0;
-
-  const txSnap = await db.ref(`transactions/${token}`).get();
-  let pendingTx = txSnap.exists() ? txSnap.val() : null;
-
-  if (!pendingTx && data.merchantReference) {
-    const txByRefSnap = await db.ref('transactions')
-      .orderByChild('merchantReference')
-      .equalTo(data.merchantReference)
-      .once('value');
-
-    if (txByRefSnap.exists()) {
-      const txMap = txByRefSnap.val();
-      const firstKey = Object.keys(txMap)[0];
-      pendingTx = txMap[firstKey];
-    }
-  }
-
-  if (pendingTx) {
-    targetUserId = targetUserId || pendingTx.userId;
-    amountInCents = pendingTx.amountInCents || 0;
-  }
-
-  // Step D: Evaluate Fallback Success (1Voucher redeemed but PayM8 stuck at step 1)
-  let isFallbackSuccess = false;
-
-  if (!isStandardSuccess && outcomeData.result === 0 && data.lastCompletedStep === 1) {
-    // Verify transaction exists, was initiated within the last 10 minutes, and hasn't been completed yet
-    const isRecent = pendingTx && (Date.now() - pendingTx.createdAt < 600000); 
-    if (isRecent && pendingTx.status === 'PENDING') {
-      console.warn(`[SETTLEMENT FALLBACK] PayM8 stuck at step 1 for token ${token}. Executing downstream recovery settlement.`);
-      isFallbackSuccess = true;
-    }
-  }
-
-  if (!isStandardSuccess && !isFallbackSuccess) {
-    console.warn(`[SETTLEMENT SKIPPED] Outcome not verified for token \({token}. Outcome code:\){data.outcomeCode}, Step: ${data.lastCompletedStep}`);
-    return;
-  }
-
-  if (!targetUserId) {
-    console.error(`[SETTLEMENT ERROR] Could not determine userId for token ${token}`);
-    return;
-  }
-
-  if (!amountInCents && data.totalCostInCents) {
-    amountInCents = parseInt(data.totalCostInCents, 10);
-  }
-
-  if (!amountInCents || amountInCents <= 0) {
-    console.error(`[SETTLEMENT ERROR] Invalid deposit amount for token ${token}`);
-    return;
-  }
-
-  const amountInRands = amountInCents / 100;
-
-  // Step E: Lock processed deposit (Idempotency)
-  await processedRef.set({
-    userId: targetUserId,
-    amountInRands,
-    merchantReference: data.merchantReference || (pendingTx ? pendingTx.merchantReference : 'UNKNOWN'),
-    settlementMethod: isFallbackSuccess ? 'FALLBACK_RECOVERY' : 'STANDARD',
-    processedAt: Date.now()
-  });
-
-  // Update pending transaction state
-  if (pendingTx) {
-    await db.ref(`transactions/${token}/status`).set('COMPLETED');
-  }
-
-  // Step F: Credit user wallet atomically in Firebase
-  const walletRef = db.ref(`wallet/${targetUserId}/cashBalance`);
-  await walletRef.transaction((currentBalance) => {
-    return (currentBalance || 0) + amountInRands;
-  });
-
-  console.log(`[SETTLEMENT SUCCESS] Credited R\({amountInRands.toFixed(2)} to wallet/\){targetUserId} (Method: ${isFallbackSuccess ? 'FALLBACK' : 'STANDARD'})`);
-}
-
-async function handlePayM8Callback(req, res) {
-  const userId = req.query.userId || null;
-  const token = req.query.token || null;
-
-  console.log('PAYM8 CALLBACK RECEIVED:', { userId, token, method: req.method });
-
-  res.status(200).json({ received: true });
-
-  if (token) {
-    try {
-      await processSettlement(userId, token);
-    } catch (err) {
-      console.error('[SETTLEMENT ERROR]', err.message);
-    }
-  }
-}
-
-app.post('/api/1voucher/callback', handlePayM8Callback);
-app.get('/api/1voucher/callback', handlePayM8Callback);
+});
 
 
 /* =========================================================
-   3. RESULT REDIRECT
+   3. PAYM8 CALLBACK
    ========================================================= */
 
-app.get('/wallet-success', async (req, res) => {
-  const token = req.query.token || null;
+async function handlePayM8Callback(req, res) {
 
-  if (token && db) {
-    try {
-      await processSettlement(null, token);
-    } catch (e) {
-      console.error('Redirect settlement check failed:', e.message);
-    }
+  console.log('');
+  console.log(
+    '=============================================='
+  );
+  console.log(
+    'PAYM8 CALLBACK RECEIVED'
+  );
+  console.log(
+    '=============================================='
+  );
+
+  console.log(
+    'HTTP Method:',
+    req.method
+  );
+
+  const token =
+    req.query.token ||
+    (req.body && req.body.token) ||
+    null;
+
+  const userId =
+    req.query.userId ||
+    (req.body && req.body.userId) ||
+    null;
+
+
+  console.log(
+    'Token received:',
+    token ? 'YES' : 'NO'
+  );
+
+  console.log(
+    'User ID supplied:',
+    userId ? 'YES' : 'NO'
+  );
+
+  console.log(
+    'Callback body:',
+    JSON.stringify(req.body || {})
+  );
+
+
+  if (!token) {
+
+    console.error(
+      'PAYM8 callback did not contain a token.'
+    );
+
+    return res.status(200).json({
+
+      received: true,
+
+      status:
+        'NO_TOKEN'
+
+    });
+
   }
 
-  res.status(200).send(`
-    
-    
-    
-      
-      Payment Verification
-      
-    
-    
-PAYMENT PROCESSED
-Your payment has been processed and verified.
 
-Return to your wallet to view your updated balance.
+  try {
 
-RETURN TO WALLET
+    const transaction =
+      await findTransactionByToken(token);
 
-`);
-});
+
+    if (!transaction) {
+
+      console.error(
+        'No local transaction found for PayM8 token:',
+        token
+      );
+
+      /*
+       * We still return HTTP 200 so PayM8 knows
+       * the callback endpoint is alive.
+       */
+
+      return res.status(200).json({
+
+        received: true,
+
+        status:
+          'TRANSACTION_NOT_FOUND'
+
+      });
+
+    }
+
+
+    console.log(
+      'Local transaction found:',
+      transaction.merchantReference
+    );
+
+
+    /* -----------------------------------------------------
+       GET CURRENT PAYM8 OUTCOME
+       ----------------------------------------------------- */
+
+    const outcome =
+      await getPaym8Outcome(token);
+
+
+    const interpretation =
+      interpretPaym8Outcome(outcome);
+
+
+    console.log(
+      'PAYM8 interpretation:',
+      JSON.stringify(
+        interpretation
+      )
+    );
+
+
+    await updateTransaction(
+
+      transaction.merchantReference,
+
+      {
+
+        status:
+          interpretation.status,
+
+        lastCompletedStep:
+          interpretation.lastCompletedStep,
+
+        outcomeCode:
+          interpretation.outcomeCode,
+
+        outcomeDescription:
+          interpretation.outcomeDescription,
+
+        errorSourceSystem:
+          interpretation.errorSourceSystem,
+
+        errorCodes:
+          interpretation.errorCodes,
+
+        lastPaym8Response:
+          outcome.data,
+
+        callbackReceivedAt:
+          new Date().toISOString()
+
+      }
+
+    );
+
+
+  } catch (err) {
+
+    console.error(
+      'Callback processing error:',
+      err
+    );
+
+  }
+
+
+  /*
+   * Always acknowledge the callback.
+   *
+   * IMPORTANT:
+   * No wallet credit occurs here in Stage 1.
+   */
+
+  return res.status(200).json({
+
+    received: true
+
+  });
+
+}
+
+
+app.post(
+  '/api/1voucher/callback',
+  handlePayM8Callback
+);
+
+
+app.get(
+  '/api/1voucher/callback',
+  handlePayM8Callback
+);
+
 
 /* =========================================================
-4. SERVER START
-========================================================= */
+   4. PAYMENT STATUS
+   ========================================================= */
 
-app.listen(PORT, () => {
-console.log(Server listening on port ${PORT});
-});
+app.get(
+  '/payment-status',
+  async (req, res) => {
+
+    try {
+
+      const token =
+        req.query.token;
+
+
+      if (!token) {
+
+        return res.status(400).json({
+
+          success: false,
+
+          error:
+            'Missing transaction token.'
+
+        });
+
+      }
+
+
+      const transaction =
+        await findTransactionByToken(token);
+
+
+      if (!transaction) {
+
+        return res.status(404).json({
+
+          success: false,
+
+          status:
+            'NOT_FOUND',
+
+          error:
+            'Transaction was not found.'
+
+        });
+
+      }
+
+
+      /*
+       * Ask PayM8 for the latest outcome every time
+       * the customer checks the payment status.
+       */
+
+      const outcome =
+        await getPaym8Outcome(token);
+
+
+      const interpretation =
+        interpretPaym8Outcome(outcome);
+
+
+      await updateTransaction(
+
+        transaction.merchantReference,
+
+        {
+
+          status:
+            interpretation.status,
+
+          lastCompletedStep:
+            interpretation.lastCompletedStep,
+
+          outcomeCode:
+            interpretation.outcomeCode,
+
+          outcomeDescription:
+            interpretation.outcomeDescription,
+
+          errorSourceSystem:
+            interpretation.errorSourceSystem,
+
+          errorCodes:
+            interpretation.errorCodes,
+
+          lastPaym8Response:
+            outcome.data
+
+        }
+
+      );
+
+
+      return res.json({
+
+        success: true,
+
+        status:
+          interpretation.status,
+
+        safeToCredit:
+          false,
+
+        merchantReference:
+          transaction.merchantReference,
+
+        amountInCents:
+          transaction.amountInCents,
+
+        amountRand:
+          transaction.amountRand,
+
+        walletCredited:
+          transaction.walletCredited || false,
+
+        lastCompletedStep:
+          interpretation.lastCompletedStep,
+
+        outcomeCode:
+          interpretation.outcomeCode,
+
+        outcomeDescription:
+          interpretation.outcomeDescription,
+
+        errorSourceSystem:
+          interpretation.errorSourceSystem,
+
+        errorCodes:
+          interpretation.errorCodes
+
+      });
+
+
+    } catch (err) {
+
+      console.error(
+        'Payment status error:',
+        err
+      );
+
+
+      return res.status(500).json({
+
+        success: false,
+
+        error:
+          err.message
+
+      });
+
+    }
+
+  }
+);
+
+
+/* =========================================================
+   5. PAYM8 RESULT REDIRECT
+   ========================================================= */
+
+app.get(
+  '/wallet-success',
+  async (req, res) => {
+
+    const token =
+      req.query.token || null;
+
+
+    console.log('');
+    console.log(
+      '=============================================='
+    );
+    console.log(
+      'PAYM8 RESULT REDIRECT RECEIVED'
+    );
+    console.log(
+      '=============================================='
+    );
+
+    console.log(
+      'Token received:',
+      token ? 'YES' : 'NO'
+    );
+
+
+    if (!token) {
+
+      return res.status(400).send(`
+
+        <!DOCTYPE html>
+
+        <html>
+
+        <head>
+
+          <meta charset="UTF-8">
+
+          <title>Payment Error</title>
+
+          <style>
+
+            body {
+              margin: 0;
+              min-height: 100vh;
+              display: flex;
+              justify-content: center;
+              align-items: center;
+              background: #001f3f;
+              color: white;
+              font-family: Arial, sans-serif;
+              text-align: center;
+            }
+
+            .box {
+              width: 90%;
+              max-width: 450px;
+              padding: 30px;
+              background: #001428;
+              border-radius: 12px;
+              box-shadow:
+                0 0 20px rgba(0,0,0,0.5);
+            }
+
+            h1 {
+              color: #ff5555;
+            }
+
+          </style>
+
+        </head>
+
+        <body>
+
+          <div class="box">
+
+            <h1>PAYMENT ERROR</h1>
+
+            <p>
+              No PayM8 transaction token was received.
+            </p>
+
+          </div>
+
+        </body>
+
+        </html>
+
+      `);
+
+    }
+
+
+    /*
+     * The browser will use JavaScript to repeatedly
+     * ask our backend for the latest PayM8 status.
+     */
+
+    const statusUrl =
+      `/payment-status?token=${encodeURIComponent(token)}`;
+
+
+    res.status(200).send(`
+
+      <!DOCTYPE html>
+
+      <html>
+
+      <head>
+
+        <meta charset="UTF-8">
+
+        <meta
+          name="viewport"
+          content="width=device-width, initial-scale=1.0"
+        >
+
+        <title>Payment Verification</title>
+
+        <style>
+
+          body {
+
+            margin: 0;
+
+            min-height: 100vh;
+
+            display: flex;
+
+            justify-content: center;
+
+            align-items: center;
+
+            background: #001f3f;
+
+            color: white;
+
+            font-family: Arial, sans-serif;
+
+            text-align: center;
+
+          }
+
+
+          .box {
+
+            width: 90%;
+
+            max-width: 450px;
+
+            padding: 30px;
+
+            background: #001428;
+
+            border-radius: 12px;
+
+            box-shadow:
+              0 0 20px rgba(0,0,0,0.5);
+
+          }
+
+
+          h1 {
+
+            color: #00f0ff;
+
+          }
+
+
+          #status {
+
+            line-height: 1.7;
+
+            margin-top: 20px;
+
+          }
+
+
+          button {
+
+            padding: 12px 20px;
+
+            border: none;
+
+            border-radius: 6px;
+
+            background: #00f0ff;
+
+            color: #001f3f;
+
+            font-weight: bold;
+
+            cursor: pointer;
+
+            margin-top: 20px;
+
+          }
+
+        </style>
+
+      </head>
+
+
+      <body>
+
+        <div class="box">
+
+          <h1 id="heading">
+            VERIFYING PAYMENT
+          </h1>
+
+          <p id="status">
+            We are checking your payment with PayM8.
+          </p>
+
+          <button
+            onclick="history.back()"
+          >
+            RETURN
+          </button>
+
+        </div>
+
+
+        <script>
+
+          const statusUrl =
+            ${JSON.stringify(statusUrl)};
+
+          let attempts = 0;
+
+          const maxAttempts = 10;
+
+
+          async function checkPayment() {
+
+            attempts++;
+
+
+            try {
+
+              const response =
+                await fetch(statusUrl, {
+                  cache: 'no-store'
+                });
+
+
+              const data =
+                await response.json();
+
+
+              console.log(
+                'Payment status:',
+                data
+              );
+
+
+              if (
+                data.status ===
+                'PENDING'
+              ) {
+
+                document.getElementById(
+                  'heading'
+                ).textContent =
+                  'PAYMENT PENDING';
+
+
+                document.getElementById(
+                  'status'
+                ).textContent =
+                  'PayM8 has not yet returned a final payment outcome. We will not credit your wallet until the transaction is confirmed.';
+
+
+              } else if (
+                data.status ===
+                'OUTCOME_RECEIVED'
+              ) {
+
+                document.getElementById(
+                  'heading'
+                ).textContent =
+                  'PAYMENT OUTCOME RECEIVED';
+
+
+                document.getElementById(
+                  'status'
+                ).textContent =
+                  'PayM8 has returned an outcome. The transaction is being held for final verification before wallet crediting.';
+
+
+                return;
+
+
+              } else {
+
+                document.getElementById(
+                  'status'
+                ).textContent =
+                  'Current payment status: ' +
+                  data.status;
+
+              }
+
+
+            } catch (error) {
+
+              console.error(
+                'Payment status check failed:',
+                error
+              );
+
+
+              document.getElementById(
+                'status'
+              ).textContent =
+                'We are still trying to check the payment status.';
+
+            }
+
+
+            if (
+              attempts < maxAttempts
+            ) {
+
+              setTimeout(
+                checkPayment,
+                3000
+              );
+
+            }
+
+          }
+
+
+          checkPayment();
+
+        </script>
+
+      </body>
+
+      </html>
+
+    `);
+
+  }
+);
+
+
+/* =========================================================
+   6. TEMPORARY DEBUG PAYMENT OUTCOME
+   ========================================================= */
+
+app.get(
+  '/debug/payment-outcome',
+  async (req, res) => {
+
+    try {
+
+      const token =
+        req.query.token;
+
+
+      if (!token) {
+
+        return res.status(400).json({
+
+          success: false,
+
+          error:
+            'Missing transaction token.'
+
+        });
+
+      }
+
+
+      const outcome =
+        await getPaym8Outcome(token);
+
+
+      return res.status(
+        outcome.httpOk
+          ? 200
+          : outcome.httpStatus
+      ).json({
+
+        success:
+          outcome.httpOk,
+
+        paym8HttpStatus:
+          outcome.httpStatus,
+
+        outcome:
+          outcome.data
+
+      });
+
+
+    } catch (err) {
+
+      console.error(
+        'Debug payment outcome error:',
+        err
+      );
+
+
+      return res.status(500).json({
+
+        success: false,
+
+        error:
+          err.message
+
+      });
+
+    }
+
+  }
+);
+
+
+/* =========================================================
+   7. SERVER START
+   ========================================================= */
+
+app.listen(
+  PORT,
+  () => {
+
+    console.log(
+      `Server listening on port ${PORT}`
+    );
+
+    console.log(
+      'Firebase configured:',
+      firebaseReady
+    );
+
+    console.log(
+      'PayM8 configured:',
+      !!PAYM8_AUTH_HEADER
+    );
+
+  }
+);
