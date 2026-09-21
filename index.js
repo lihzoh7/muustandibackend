@@ -90,7 +90,7 @@ app.post('/deposit/1voucher', async (req, res) => {
       transactionDescription: '1Voucher Wallet Deposit',
       merchantReferenceNumber: shortRef,
       userHostAddress: clientIp,
-      resultRedirectUrl: 'https://muustandibackend.onrender.com/wallet-success?userId=' + encodeURIComponent(userId) + '&token={0}',
+      resultRedirectUrl: 'https://muustandibackend.onrender.com/wallet-success?token={0}',
       callbackUrl: callbackUrl,
       paymentChannels: [
         {
@@ -221,7 +221,7 @@ async function processSettlement(userId, token) {
       return;
     }
 
-    // Check if process completed
+    // Stop polling if completed or faulted
     if (data.lastCompletedStep >= 2 || data.outcomeCode === 'Faulted' || data.outcomeCode === '00' || data.outcomeCode === 0) {
       break;
     }
@@ -249,9 +249,23 @@ async function processSettlement(userId, token) {
     return;
   }
 
-  const targetUserId = userId;
+  // Determine user ID from transaction store if missing from callback
+  let targetUserId = userId;
+  if (!targetUserId && data.merchantReference) {
+    const txByRefSnap = await db.ref('transactions')
+      .orderByChild('merchantReference')
+      .equalTo(data.merchantReference)
+      .once('value');
+
+    if (txByRefSnap.exists()) {
+      const txMap = txByRefSnap.val();
+      const firstKey = Object.keys(txMap)[0];
+      targetUserId = txMap[firstKey].userId;
+    }
+  }
+
   if (!targetUserId) {
-    console.error(`[SETTLEMENT ERROR] No userId provided in callback for token ${token}`);
+    console.error(`[SETTLEMENT ERROR] No userId provided in callback or transaction log for token ${token}`);
     return;
   }
 
@@ -325,11 +339,10 @@ app.get('/api/1voucher/callback', handlePayM8Callback);
 
 app.get('/wallet-success', async (req, res) => {
   const token = req.query.token || null;
-  const userId = req.query.userId || null;
 
   if (token && db) {
     try {
-      await processSettlement(userId, token);
+      await processSettlement(null, token);
     } catch (e) {
       console.error('Redirect settlement check failed:', e.message);
     }
