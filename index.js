@@ -197,7 +197,7 @@ async function processSettlement(userId, token) {
   // Poll PayM8 up to 5 times (3-second delays = 15s total window)
   while (attempts < maxAttempts) {
     attempts++;
-    console.log(`[SETTLEMENT] Querying PayM8 outcome for token ${token} (Attempt ${attempts}/${maxAttempts})...`);
+    console.log(`[SETTLEMENT] Querying PayM8 outcome for token \({token} (Attempt\){attempts}/${maxAttempts})...`);
 
     try {
       const outcomeResponse = await fetch(
@@ -271,7 +271,7 @@ async function processSettlement(userId, token) {
   }
 
   if (!isStandardSuccess && !isFallbackSuccess) {
-    console.warn(`[SETTLEMENT SKIPPED] Outcome not verified for token ${token}. Outcome code: ${data.outcomeCode}, Step: ${data.lastCompletedStep}`);
+    console.warn(`[SETTLEMENT SKIPPED] Outcome not verified for token \({token}. Outcome code:\){data.outcomeCode}, Step: ${data.lastCompletedStep}`);
     return;
   }
 
@@ -311,7 +311,7 @@ async function processSettlement(userId, token) {
     return (currentBalance || 0) + amountInRands;
   });
 
-  console.log(`[SETTLEMENT SUCCESS] Credited R${amountInRands.toFixed(2)} to wallet/${targetUserId} (Method: ${isFallbackSuccess ? 'FALLBACK' : 'STANDARD'})`);
+  console.log(`[SETTLEMENT SUCCESS] Credited R\({amountInRands.toFixed(2)} to wallet/\){targetUserId} (Method: ${isFallbackSuccess ? 'FALLBACK' : 'STANDARD'})`);
 }
 
 async function handlePayM8Callback(req, res) {
@@ -351,49 +351,8 @@ app.get('/wallet-success', async (req, res) => {
   }
 
   res.status(200).send(`
-    <!DOCTYPE html>
-    <html>
-    <head>
-      <meta charset="UTF-8">
-      <title>Payment Verification</title>
-      <style>
-        body {
-          margin: 0; min-height: 100vh; display: flex;
-          justify-content: center; align-items: center;
-          background: #001f3f; color: white; font-family: Arial, sans-serif;
-          text-align: center;
-        }
-        .box {
-          width: 90%; max-width: 450px; padding: 30px;
-          background: #001428; border-radius: 12px;
-          box-shadow: 0 0 20px rgba(0,0,0,0.5);
-        }
-        h1 { color: #00f0ff; }
-        p { line-height: 1.6; }
-        button {
-          padding: 12px 20px; border: none; border-radius: 6px;
-          background: #00f0ff; color: #001f3f; font-weight: bold;
-          cursor: pointer; margin-top: 15px;
-        }
-      </style>
-    </head>
-    <body>
-      <div class="box">
-        <h1>PAYMENT PROCESSED</h1>
-        <p>Your payment has been processed and verified.</p>
-        <p>Return to your wallet to view your updated balance.</p>
-        <button onclick="window.close(); history.back();">RETURN TO WALLET</button>
-      </div>
-    </body>
-    </html>
-  `);
-});
-
-
-/* =========================================================
-   4. SERVER START
-   ========================================================= */
-
-app.listen(PORT, () => {
-  console.log(`Server listening on port ${PORT}`);
-});
+    
+    
+    
+      
+      Payment Verification
