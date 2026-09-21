@@ -38,6 +38,9 @@ if (
 
 const db = admin.apps.length ? admin.database() : null;
 
+// Helper: Pause execution for delayed polling
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
 /* =========================================================
    1. 1VOUCHER DEPOSIT INITIATION
    ========================================================= */
@@ -87,7 +90,7 @@ app.post('/deposit/1voucher', async (req, res) => {
       transactionDescription: '1Voucher Wallet Deposit',
       merchantReferenceNumber: shortRef,
       userHostAddress: clientIp,
-      resultRedirectUrl: 'https://muustandibackend.onrender.com/wallet-success?token={0}',
+      resultRedirectUrl: 'https://muustandibackend.onrender.com/wallet-success?userId=' + encodeURIComponent(userId) + '&token={0}',
       callbackUrl: callbackUrl,
       paymentChannels: [
         {
@@ -168,7 +171,7 @@ app.post('/deposit/1voucher', async (req, res) => {
 
 
 /* =========================================================
-   2. PAYM8 CALLBACK & AUTOMATIC SETTLEMENT
+   2. PAYM8 CALLBACK & AUTOMATIC SETTLEMENT (WITH POLLING)
    ========================================================= */
 
 async function processSettlement(userId, token) {
@@ -177,7 +180,7 @@ async function processSettlement(userId, token) {
     return;
   }
 
-  // Idempotency check: Ensure token hasn't already been processed
+  // Idempotency check
   const processedRef = db.ref(`processed_deposits/${token}`);
   const processedSnap = await processedRef.get();
 
@@ -186,30 +189,48 @@ async function processSettlement(userId, token) {
     return;
   }
 
-  // Query PayM8 for payment outcome
-  const outcomeResponse = await fetch(
-    `https://paym8online.com/PaymentsService/api/V1/ecommerce/GetPaymentOutcome/${encodeURIComponent(token)}`,
-    {
-      method: 'GET',
-      headers: {
-        'Accept': 'application/json',
-        'Authorization': PAYM8_AUTH_HEADER
-      }
-    }
-  );
-
-  const outcomeText = await outcomeResponse.text();
-  console.log(`[SETTLEMENT] PayM8 GetPaymentOutcome (${token}):`, outcomeText);
-
   let outcomeData = {};
-  try {
-    outcomeData = JSON.parse(outcomeText);
-  } catch (e) {
-    console.error('[SETTLEMENT] Failed to parse PayM8 response');
-    return;
-  }
+  let data = {};
+  let attempts = 0;
+  const maxAttempts = 4;
 
-  const data = outcomeData.data || {};
+  // Poll PayM8 up to 4 times (with 2.5 second delays) if outcome is still pending
+  while (attempts < maxAttempts) {
+    attempts++;
+    console.log(`[SETTLEMENT] Querying PayM8 outcome for token ${token} (Attempt ${attempts}/${maxAttempts})...`);
+
+    const outcomeResponse = await fetch(
+      `https://paym8online.com/PaymentsService/api/V1/ecommerce/GetPaymentOutcome/${encodeURIComponent(token)}`,
+      {
+        method: 'GET',
+        headers: {
+          'Accept': 'application/json',
+          'Authorization': PAYM8_AUTH_HEADER
+        }
+      }
+    );
+
+    const outcomeText = await outcomeResponse.text();
+    console.log(`[SETTLEMENT] PayM8 GetPaymentOutcome (${token}):`, outcomeText);
+
+    try {
+      outcomeData = JSON.parse(outcomeText);
+      data = outcomeData.data || {};
+    } catch (e) {
+      console.error('[SETTLEMENT] Failed to parse PayM8 response');
+      return;
+    }
+
+    // Check if process completed
+    if (data.lastCompletedStep >= 2 || data.outcomeCode === 'Faulted' || data.outcomeCode === '00' || data.outcomeCode === 0) {
+      break;
+    }
+
+    if (attempts < maxAttempts) {
+      console.log(`[SETTLEMENT] Transaction step incomplete (step ${data.lastCompletedStep}). Waiting 2.5s before re-checking...`);
+      await sleep(2500);
+    }
+  }
 
   // Reject explicit failures/faults
   if (data.outcomeCode === 'Faulted' || (typeof data.outcomeCode === 'string' && data.outcomeCode.toLowerCase().includes('fault'))) {
@@ -217,7 +238,7 @@ async function processSettlement(userId, token) {
     return;
   }
 
-  // Ensure PayM8 confirmed successful completion
+  // Verify successful completion
   const isSuccess = 
     outcomeData.result === 0 &&
     (data.outcomeCode === '00' || data.outcomeCode === 0 || data.outcomeCode === 'Success') &&
@@ -304,14 +325,11 @@ app.get('/api/1voucher/callback', handlePayM8Callback);
 
 app.get('/wallet-success', async (req, res) => {
   const token = req.query.token || null;
+  const userId = req.query.userId || null;
 
   if (token && db) {
     try {
-      const txSnap = await db.ref(`transactions/${token}`).get();
-      if (txSnap.exists()) {
-        const txData = txSnap.val();
-        await processSettlement(txData.userId, token);
-      }
+      await processSettlement(userId, token);
     } catch (e) {
       console.error('Redirect settlement check failed:', e.message);
     }
