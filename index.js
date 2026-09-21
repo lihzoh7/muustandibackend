@@ -1118,7 +1118,49 @@ app.get("/", (req, res) => {
   });
 
 });
+// ============================================================
+// TEMPORARY FIREBASE WRITE TEST
+// ============================================================
 
+app.get("/test-firebase", async (req, res) => {
+  try {
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        error: "Firebase database is not available."
+      });
+    }
+
+    const testId = "TEST-" + Date.now();
+
+    const testData = {
+      test: true,
+      message: "Muustandi Firebase connection test",
+      createdAt: new Date().toISOString()
+    };
+
+    await db
+      .ref(`paymentTransactions/${testId}`)
+      .set(testData);
+
+    console.log("Firebase test transaction written:", testId);
+
+    return res.json({
+      success: true,
+      message: "Firebase write successful.",
+      testId
+    });
+
+  } catch (error) {
+    console.error("Firebase write test failed:");
+    console.error(error);
+
+    return res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
 // ============================================================
 // START SERVER
 // ============================================================
