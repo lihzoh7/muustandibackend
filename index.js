@@ -77,8 +77,11 @@ try {
 }
 
 
+const FIREBASE_DATABASE_URL =
+  'https://tose-ccf8f-default-rtdb.europe-west1.firebasedatabase.app';
+
 const db = firebaseReady
-  ? admin.database()
+  ? admin.database(FIREBASE_DATABASE_URL)
   : null;
 
 
