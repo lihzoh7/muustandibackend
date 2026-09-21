@@ -138,6 +138,7 @@ app.post('/deposit/1voucher', async (req, res) => {
     ) {
       console.log('PAYM8 payment request successful.');
 
+      // Record pending deposit in Firebase for downstream lookup/recovery
       if (db && data.data.token) {
         await db.ref(`transactions/${data.data.token}`).set({
           userId,
@@ -171,7 +172,7 @@ app.post('/deposit/1voucher', async (req, res) => {
 
 
 /* =========================================================
-   2. PAYM8 CALLBACK & AUTOMATIC SETTLEMENT (WITH FALLBACK)
+   2. PAYM8 CALLBACK & AUTOMATIC SETTLEMENT (WITH RECOVERY)
    ========================================================= */
 
 async function processSettlement(userId, token) {
@@ -180,7 +181,7 @@ async function processSettlement(userId, token) {
     return;
   }
 
-  // Idempotency check: Ensure token is never processed twice
+  // Idempotency check: Ensure token is never credited twice
   const processedRef = db.ref(`processed_deposits/${token}`);
   const processedSnap = await processedRef.get();
 
@@ -194,7 +195,7 @@ async function processSettlement(userId, token) {
   let attempts = 0;
   const maxAttempts = 5;
 
-  // Poll PayM8 up to 5 times (3-second delays = 15s total window)
+  // Step A: Poll PayM8 up to 5 times (3-second delays = 15s window)
   while (attempts < maxAttempts) {
     attempts++;
     console.log(`[SETTLEMENT] Querying PayM8 outcome for token \({token} (Attempt\){attempts}/${maxAttempts})...`);
@@ -218,7 +219,7 @@ async function processSettlement(userId, token) {
       console.error('[SETTLEMENT] Failed to parse PayM8 response:', e.message);
     }
 
-    // Stop polling if completed at Step 2 or explicit successful outcome returned
+    // Stop polling early if PayM8 officially completed step 2 or returned a failure code
     if (data.lastCompletedStep >= 2 || data.outcomeCode === '00' || data.outcomeCode === 0) {
       break;
     }
@@ -228,18 +229,16 @@ async function processSettlement(userId, token) {
     }
   }
 
-  // Path A: Standard Success (PayM8 reached step 2 with outcomeCode 00 / Success)
+  // Step B: Evaluate Standard Success
   const isStandardSuccess = 
     outcomeData.result === 0 &&
     (data.outcomeCode === '00' || data.outcomeCode === 0 || data.outcomeCode === 'Success') &&
     data.lastCompletedStep >= 2;
 
-  // Path B: Downstream Timeout Fallback (PayM8 stuck at Step 1, result: 0, no error codes)
-  let isFallbackSuccess = false;
+  // Step C: Look up local transaction record for Recovery Settlement
   let targetUserId = userId;
   let amountInCents = 0;
 
-  // Search for the initiated transaction record in Firebase Realtime DB
   const txSnap = await db.ref(`transactions/${token}`).get();
   let pendingTx = txSnap.exists() ? txSnap.val() : null;
 
@@ -261,11 +260,14 @@ async function processSettlement(userId, token) {
     amountInCents = pendingTx.amountInCents || 0;
   }
 
-  // Trigger Fallback if PayM8 is stuck at Step 1 for a valid transaction initiated in the last 10 mins
+  // Step D: Evaluate Fallback Success (1Voucher redeemed but PayM8 stuck at step 1)
+  let isFallbackSuccess = false;
+
   if (!isStandardSuccess && outcomeData.result === 0 && data.lastCompletedStep === 1) {
-    const isRecent = pendingTx && (Date.now() - pendingTx.createdAt < 600000);
+    // Verify transaction exists, was initiated within the last 10 minutes, and hasn't been completed yet
+    const isRecent = pendingTx && (Date.now() - pendingTx.createdAt < 600000); 
     if (isRecent && pendingTx.status === 'PENDING') {
-      console.warn(`[SETTLEMENT FALLBACK] PayM8 stuck at step 1 for token ${token}. Applying downstream recovery settlement.`);
+      console.warn(`[SETTLEMENT FALLBACK] PayM8 stuck at step 1 for token ${token}. Executing downstream recovery settlement.`);
       isFallbackSuccess = true;
     }
   }
@@ -291,7 +293,7 @@ async function processSettlement(userId, token) {
 
   const amountInRands = amountInCents / 100;
 
-  // Lock token in processed_deposits before modifying user wallet
+  // Step E: Lock processed deposit (Idempotency)
   await processedRef.set({
     userId: targetUserId,
     amountInRands,
@@ -300,12 +302,12 @@ async function processSettlement(userId, token) {
     processedAt: Date.now()
   });
 
-  // Mark transaction as COMPLETED in DB
+  // Update pending transaction state
   if (pendingTx) {
     await db.ref(`transactions/${token}/status`).set('COMPLETED');
   }
 
-  // Atomic wallet balance update
+  // Step F: Credit user wallet atomically in Firebase
   const walletRef = db.ref(`wallet/${targetUserId}/cashBalance`);
   await walletRef.transaction((currentBalance) => {
     return (currentBalance || 0) + amountInRands;
