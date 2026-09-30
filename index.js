@@ -434,17 +434,13 @@ app.post("/deposit/1voucher", async (req, res) => {
     );
 
     /* -------------------------------------------------------
-       PAYM8 UNIQUE CUSTOMER ID
-       ------------------------------------------------------- */
-
-    const uniqueCustomerId = String(userId);
-
-    /* -------------------------------------------------------
        PAYM8 REQUEST PAYLOAD
        
        IMPORTANT:
-       We are NOT adding a guessed date/time field here.
-       Paul needs to identify the exact field and format.
+       uniqueCustomerId has been REMOVED for this
+       controlled PayM8 test, as requested by Paul.
+       
+       We are also NOT adding a guessed date/time field.
        ------------------------------------------------------- */
 
     const payload = {
@@ -478,15 +474,51 @@ app.post("/deposit/1voucher", async (req, res) => {
       merchantClientProfile:
         MERCHANT_CLIENT_PROFILE,
 
-      uniqueCustomerId:
-        uniqueCustomerId,
-
       FirstName:
         firstName,
 
       Lastname:
         lastName,
     };
+
+    /* =====================================================
+       SERVER TIMEZONE DEBUG INFORMATION
+       ===================================================== */
+
+    console.log("");
+    console.log(
+      "=============================================="
+    );
+    console.log(
+      "SERVER TIMEZONE INFORMATION"
+    );
+    console.log(
+      "=============================================="
+    );
+
+    console.log(
+      "Server timezone:",
+      Intl.DateTimeFormat().resolvedOptions().timeZone
+    );
+
+    console.log(
+      "Server current UTC time:",
+      new Date().toISOString()
+    );
+
+    console.log(
+      "Server current South Africa time:",
+      new Intl.DateTimeFormat("en-ZA", {
+        timeZone: "Africa/Johannesburg",
+        dateStyle: "full",
+        timeStyle: "long",
+      }).format(new Date())
+    );
+
+    console.log(
+      "=============================================="
+    );
+    console.log("");
 
     /* =====================================================
        IMPORTANT DEBUG LOG FOR PAUL
@@ -539,8 +571,7 @@ app.post("/deposit/1voucher", async (req, res) => {
       MERCHANT_CLIENT_PROFILE
     );
     console.log(
-      "UniqueCustomerId:",
-      uniqueCustomerId
+      "UniqueCustomerId: NOT SENT"
     );
     console.log(
       "Callback URL:",
@@ -854,7 +885,7 @@ app.all(
        * The callback by itself does not prove that
        * the 1Voucher payment was successfully completed.
        *
-       * Final Paym8 outcome must be checked first.
+       * Final PayM8 outcome must be checked first.
        */
 
       return res.status(200).send("OK");
