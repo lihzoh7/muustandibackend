@@ -1,4 +1,3 @@
-
 const express = require("express");
 const cors = require("cors");
 const admin = require("firebase-admin");
@@ -32,7 +31,7 @@ const MERCHANT_CLIENT_PROFILE = "PMV-03";
 const MERCHANT_BRANCH_PRODUCT_NUMBER = "JQVSND";
 
 const BACKEND_URL = "https://muustandibackend.onrender.com";
-const WALLET_URL = "https://muustandigamin.xyz/wallet.html";
+const WALLET_URL = "https://muustandibackend.onrender.com/wallet.html";
 
 let db = null;
 
@@ -259,22 +258,6 @@ async function saveOutcome(transaction, outcome) {
    WALLET CREDIT — SUCCESS ONLY, EXACTLY ONCE
    ========================================================= */
 
-/*
- * IMPORTANT:
- *
- * This function is called only after PayM8 returns outcomeCode
- * "Complete".
- *
- * The wallet transaction atomically:
- *   1. Checks wallet.creditedPayments for this deposit.
- *   2. Adds the deposit amount if it has not been credited.
-   *   3. Records the deposit in creditedPayments.
- *
- * The balance increment and ledger marker are saved together.
- * This prevents duplicate credits if callbacks or browser polling
- * repeat, or if the server restarts after updating the wallet.
- */
-
 async function creditWalletIfConfirmed(transaction, outcomeData) {
   if (!db || !transaction?.key) {
     return {
@@ -335,7 +318,7 @@ async function creditWalletIfConfirmed(transaction, outcomeData) {
   const walletRef = db.ref(`wallet/${userId}`);
 
   let alreadyCredited = false;
-  let selectedBalanceField = "gems";
+  const selectedBalanceField = "cashBalance";
 
   const walletResult = await walletRef.transaction((current) => {
     const wallet =
@@ -359,29 +342,23 @@ async function creditWalletIfConfirmed(transaction, outcomeData) {
     }
 
     /*
-     * Support the existing wallet balance field:
-     * - use gems when the wallet already uses gems;
-     * - use cashBalance when the wallet uses cashBalance only;
-     * - default to gems for a new wallet.
+     * ALWAYS credit cashBalance for Rand wallet top-ups.
+     * If legacy gems exist, add them into cashBalance as well.
      */
+    const existingCash = Number(wallet.cashBalance);
+    const existingGems = Number(wallet.gems);
 
-    selectedBalanceField =
-      Object.prototype.hasOwnProperty.call(wallet, "gems")
-        ? "gems"
-        : Object.prototype.hasOwnProperty.call(wallet, "cashBalance")
-          ? "cashBalance"
-          : "gems";
-
-    const oldBalance = Number(wallet[selectedBalanceField] || 0);
-
-    if (!Number.isFinite(oldBalance)) {
-      return;
+    let currentBalance = 0;
+    if (Number.isFinite(existingCash)) {
+      currentBalance = existingCash;
+    } else if (Number.isFinite(existingGems)) {
+      currentBalance = existingGems;
     }
 
     return {
       ...wallet,
 
-      [selectedBalanceField]: oldBalance + depositAmount,
+      cashBalance: currentBalance + depositAmount,
 
       creditedPayments: {
         ...ledger,
@@ -404,23 +381,13 @@ async function creditWalletIfConfirmed(transaction, outcomeData) {
     const freshLedger = freshWallet.creditedPayments || {};
 
     if (freshLedger[transactionKey] === true) {
-      const actualBalanceField =
-        Object.prototype.hasOwnProperty.call(freshWallet, "gems")
-          ? "gems"
-          : Object.prototype.hasOwnProperty.call(
-                freshWallet,
-                "cashBalance"
-              )
-            ? "cashBalance"
-            : "gems";
-
       await transactionRef.update({
         walletCredited: true,
         creditInProgress: false,
         walletCreditedAt:
           currentTransaction.walletCreditedAt || nowIso(),
         creditedAmountInCents: amountInCents,
-        walletBalanceField: actualBalanceField,
+        walletBalanceField: selectedBalanceField,
         walletAfter: freshWallet,
         status: "COMPLETED",
         updatedAt: nowIso(),
@@ -474,7 +441,7 @@ async function creditWalletIfConfirmed(transaction, outcomeData) {
   console.log("Amount Rand:", depositAmount);
   console.log("Balance field:", selectedBalanceField);
   console.log(
-    "New balance:",
+    "New cashBalance:",
     walletAfter?.[selectedBalanceField]
   );
   console.log("Already credited before this attempt:", alreadyCredited);
@@ -717,11 +684,6 @@ app.post("/deposit/1voucher", async (req, res) => {
       .ref(`paymentTransactions/${merchantReference}`)
       .set(transactionData);
 
-    /*
-     * Preserve the PayM8 fields confirmed in the integration
-     * instructions. Do not send the voucher PIN from this server.
-     */
-
     const payload = {
       merchantBranchProductNumber:
         MERCHANT_BRANCH_PRODUCT_NUMBER,
@@ -785,11 +747,6 @@ app.post("/deposit/1voucher", async (req, res) => {
     console.log("PayM8 response:", raw);
 
     const data = result?.data;
-
-    /*
-     * This confirms only that PayM8 accepted the submission.
-     * The wallet is NOT credited here.
-     */
 
     if (
       !response.ok ||
@@ -916,11 +873,6 @@ async function handlePayM8Callback(req, res) {
       body: req.body || {},
       receivedAt: nowIso(),
     });
-
-    /*
-     * Always verify the callback with PayM8's outcome endpoint.
-     * A callback alone does not authorize wallet credit.
-     */
 
     const outcome = await getPaym8Outcome(token);
 
