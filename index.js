@@ -31,7 +31,7 @@ const MERCHANT_CLIENT_PROFILE = "PMV-03";
 const MERCHANT_BRANCH_PRODUCT_NUMBER = "JQVSND";
 
 const BACKEND_URL = "https://muustandibackend.onrender.com";
-const WALLET_URL = "https://muustandibackend.onrender.com/wallet.html";
+const WALLET_URL = "https://muustandigamin.xyz/wallet.html";
 
 let db = null;
 
@@ -341,24 +341,15 @@ async function creditWalletIfConfirmed(transaction, outcomeData) {
       return;
     }
 
-    /*
-     * ALWAYS credit cashBalance for Rand wallet top-ups.
-     * If legacy gems exist, add them into cashBalance as well.
-     */
-    const existingCash = Number(wallet.cashBalance);
-    const existingGems = Number(wallet.gems);
-
-    let currentBalance = 0;
-    if (Number.isFinite(existingCash)) {
-      currentBalance = existingCash;
-    } else if (Number.isFinite(existingGems)) {
-      currentBalance = existingGems;
-    }
+    const currentCashBalance = Number(wallet.cashBalance);
+    const existingBalance = Number.isFinite(currentCashBalance)
+      ? currentCashBalance
+      : 0;
 
     return {
       ...wallet,
 
-      cashBalance: currentBalance + depositAmount,
+      cashBalance: existingBalance + depositAmount,
 
       creditedPayments: {
         ...ledger,
